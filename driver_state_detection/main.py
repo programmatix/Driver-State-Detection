@@ -203,6 +203,8 @@ def main():
         # find the faces using the face mesh model
         lms = detector.process(gray).multi_face_landmarks
 
+        perclos_rolling_score_v2 = None
+
         if lms:  # process the frame only if at least a face is found
             present_values.append(1)
 
@@ -218,6 +220,9 @@ def main():
 
             # compute the PERCLOS score and state of tiredness
             tired, perclos_score = Scorer.get_PERCLOS(t_now, fps, ear)
+
+            _, perclos_rolling_score_v2 = Scorer.get_PERCLOS_rolling_v2(t_now, fps, ear, save_to_influx_every_x_seconds)
+            _, perclos_rolling_score_v3 = Scorer.get_PERCLOS_rolling_v3(t_now, fps, ear)
 
             # compute the Gaze Score
             gaze = Eye_det.get_Gaze_Score(
@@ -270,7 +275,15 @@ def main():
             # show the real-time PERCLOS score
             cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110),
                         cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
-            
+
+            cv2.putText(frame, "PERCLOS ROLLING (V3):" + str(round(perclos_rolling_score_v3, 3)), (10, 140),
+                        cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+            cv2.putText(frame, "PERCLOS ROLLING (V2):" + str(round(perclos_rolling_score_v2, 3)), (10, 170),
+                        cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+
+
             # if roll is not None:
             #     cv2.putText(frame, "roll:"+str(roll.round(1)[0]), (450, 40),
             #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
@@ -351,6 +364,13 @@ def main():
             try:
                 # Names do go on the wire but take minimal space in db
                 value = f"fatigue,host={hostname} present={pct_present}"
+
+                # All the perclos values are already % closed over some time frame, so there seems no better to averaging
+                # them further
+                if (perclos_rolling_score_v2 != None):
+                    value += f",perclosV2={perclos_rolling_score_v2}"
+                if (perclos_rolling_score_v3 != None):
+                    value += f",perclosV3={perclos_rolling_score_v3}"
                 if (average_ear != None):
                     value += f",ear={average_ear}"
                 if (average_gaze != None):

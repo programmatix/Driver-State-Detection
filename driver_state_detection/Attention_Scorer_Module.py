@@ -192,3 +192,49 @@ class AttentionScorer:
             self.prev_time = t_now
 
         return tired, perclos_score
+
+    def get_PERCLOS_rolling_v2(self, t_now, fps, ear_score, save_to_influx_every_x_seconds):
+        # Initialize the list to store timestamps of eye closures if not already done
+        if not hasattr(self, 'eye_closure_timestamps'):
+            self.eye_closure_timestamps = []
+
+        # Calculate the number of frames in a minute based on FPS
+        all_frames_numbers_in_perclos_duration = int(save_to_influx_every_x_seconds * fps)
+
+        # If EAR score indicates eyes are closed, add the current timestamp to the list
+        if (ear_score is not None) and (ear_score <= self.ear_thresh):
+            self.eye_closure_timestamps.append(t_now)
+
+        # Remove timestamps older than one minute from the current time
+        self.eye_closure_timestamps = [timestamp for timestamp in self.eye_closure_timestamps if t_now - timestamp <= save_to_influx_every_x_seconds]
+
+        # Calculate PERCLOS: number of frames with eye closure / total frames in a minute
+        perclos_score = len(self.eye_closure_timestamps) / all_frames_numbers_in_perclos_duration
+
+        # Determine tiredness based on PERCLOS threshold
+        tired = perclos_score >= self.perclos_thresh
+
+        return tired, perclos_score
+
+    def get_PERCLOS_rolling_v3(self, t_now, fps, ear_score):
+        # Initialize the list to store timestamps of eye closures if not already done
+        if not hasattr(self, 'eye_closure_timestamps_v2'):
+            self.eye_closure_timestamps_v2 = []
+
+        # Calculate the number of frames in a minute based on FPS
+        all_frames_numbers_in_perclos_duration = int(self.perclos_time_period * fps)
+
+        # If EAR score indicates eyes are closed, add the current timestamp to the list
+        if (ear_score is not None) and (ear_score <= self.ear_thresh):
+            self.eye_closure_timestamps_v2.append(t_now)
+
+        # Remove timestamps older than one minute from the current time
+        self.eye_closure_timestamps_v2 = [timestamp for timestamp in self.eye_closure_timestamps if t_now - timestamp <= self.perclos_time_period]
+
+        # Calculate PERCLOS: number of frames with eye closure / total frames in a minute
+        perclos_score = len(self.eye_closure_timestamps_v2) / all_frames_numbers_in_perclos_duration
+
+        # Determine tiredness based on PERCLOS threshold
+        tired = perclos_score >= self.perclos_thresh
+
+        return tired, perclos_score
