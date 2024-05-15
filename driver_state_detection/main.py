@@ -10,7 +10,8 @@ from Eye_Dector_Module import EyeDetector as EyeDet
 from Pose_Estimation_Module import HeadPoseEstimator as HeadPoseEst
 from Attention_Scorer_Module import AttentionScorer as AttScorer
 from influxdb_client_3 import InfluxDBClient3
-
+from RealTimeEARPlot import RealTimeEARPlot
+from RealTimePERCLOSPlot import RealTimePERCLOSPlot
 from dotenv import load_dotenv
 import os
 import socket
@@ -112,12 +113,12 @@ def main():
     if args.verbose:
         print(f"Arguments and Parameters used:\n{args}\n")
 
-    if not cv2.useOptimized():
-        try:
-            cv2.setUseOptimized(True)  # set OpenCV optimization to True
-        except:
-            print(
-                "OpenCV optimization could not be set to True, the script may be slower than expected")
+    # if not cv2.useOptimized():
+    #     try:
+    #         cv2.setUseOptimized(True)  # set OpenCV optimization to True
+    #     except:
+    #         print(
+    #             "OpenCV optimization could not be set to True, the script may be slower than expected")
 
     """instantiation of mediapipe face mesh model. This model give back 478 landmarks
     if the rifine_landmarks parameter is set to True. 468 landmarks for the face and
@@ -170,7 +171,9 @@ def main():
     pct_looking_away = 0
     pct_present = 0
 
-
+    # Example usage
+    ear_plotter = RealTimeEARPlot()
+    perclos_plotter = RealTimePERCLOSPlot()
     while True:  # infinite loop for webcam video capture
         t_now = time.perf_counter()
         fps = i / (t_now - t0)
@@ -218,11 +221,25 @@ def main():
             # compute the EAR score of the eyes
             ear = Eye_det.get_EAR(frame=gray, landmarks=landmarks)
 
+
+            # Assuming `frame` is your current video frame and `ear` is the current EAR score
+            ear_plotter.update_ear_scores(ear)  # Update the plot data
+            ear_plotter.overlay_graph_on_frame(frame)  # Overlay the graph on the frame
+
+
+            # Display the frame with the overlay
+
+            #cv2.imshow('Frame with EAR Graph', frame)
+
+
             # compute the PERCLOS score and state of tiredness
             tired, perclos_score = Scorer.get_PERCLOS(t_now, fps, ear)
 
             _, perclos_rolling_score_v2 = Scorer.get_PERCLOS_rolling_v2(t_now, fps, ear, save_to_influx_every_x_seconds)
             _, perclos_rolling_score_v3 = Scorer.get_PERCLOS_rolling_v3(t_now, fps, ear)
+
+            perclos_plotter.update_ear_scores(perclos_rolling_score_v3)  # Update the plot data
+            perclos_plotter.overlay_graph_on_frame(frame)  # Overlay the graph on the frame
 
             # compute the Gaze Score
             gaze = Eye_det.get_Gaze_Score(

@@ -216,6 +216,9 @@ class AttentionScorer:
 
         return tired, perclos_score
 
+
+    # Same as get_PERCLOS_rolling_v2 but with a different time period (60s)
+    # Basically how classic PERCLOS should have been implemented.
     def get_PERCLOS_rolling_v3(self, t_now, fps, ear_score):
         # Initialize the list to store timestamps of eye closures if not already done
         if not hasattr(self, 'eye_closure_timestamps_v2'):
