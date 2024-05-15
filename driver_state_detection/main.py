@@ -302,7 +302,7 @@ def main():
             #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
 
         else:
-            present_values.append(1)
+            present_values.append(0)
 
         cv2.putText(frame, f"Avg ear: {average_ear}", (10, 360),
                     cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
@@ -327,14 +327,14 @@ def main():
         if (time.perf_counter() - t_last_save) > save_to_influx_every_x_seconds:
             t_last_save = time.perf_counter()
 
-            average_ear = sum(ear_values) / len(ear_values) if ear_values else 0
-            average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else 0
+            average_ear = sum(ear_values) / len(ear_values) if ear_values else None
+            average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else None
 
-            worst_perclos = max(perclos_values) if perclos_values else 0
+            worst_perclos = max(perclos_values) if perclos_values else None
 
-            pct_tired = tired_values.count(True) / len(tired_values) if tired_values else 0
-            pct_distracted = distracted_values.count(True) / len(distracted_values) if distracted_values else 0
-            pct_looking_away = looking_away_values.count(True) / len(looking_away_values) if looking_away_values else 0
+            pct_tired = tired_values.count(True) / len(tired_values) if tired_values else None
+            pct_distracted = distracted_values.count(True) / len(distracted_values) if distracted_values else None
+            pct_looking_away = looking_away_values.count(True) / len(looking_away_values) if looking_away_values else None
 
             pct_present = sum(present_values) / len(present_values) if present_values else 0
 
@@ -350,18 +350,23 @@ def main():
             # Write data point to the "XL" bucket
             try:
                 # Names do go on the wire but take minimal space in db
-                client.write([
-                    f"fatigue,host={hostname} "
-                    f"ear={average_ear},"
-                    f"gaze={average_gaze},"
-                    f"perclos={worst_perclos},"
-                    f"distracted={pct_distracted},"
-                    f"tired={pct_tired},"
-                    f"lookingAway={pct_looking_away},"
-                    f"present={pct_present}"
-                    f" {int(time.time())}"
-                ],write_precision='s')
-                print("Data written successfully to InfluxDB.")
+                value = f"fatigue,host={hostname} present={pct_present}"
+                if (average_ear != None):
+                    value += f",ear={average_ear}"
+                if (average_gaze != None):
+                    value += f",gaze={average_gaze}"
+                if (worst_perclos != None):
+                    value += f",perclos={worst_perclos}"
+                if (pct_tired != None):
+                    value += f",tired={pct_tired}"
+                if (pct_distracted != None):
+                    value += f",distracted={pct_distracted}"
+                if (pct_looking_away != None):
+                    value += f",lookingAway={pct_looking_away}"
+
+                value += f" {int(time.time())}"
+                print(f"Writing data to InfluxDB: {value}")
+                client.write([value],write_precision='s')
             except Exception as e:
                 # Improved error message
                 error_type = type(e).__name__
