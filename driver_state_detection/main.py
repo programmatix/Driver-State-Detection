@@ -93,7 +93,7 @@ def zoom_in(frame, zoom_factor=2):
 
     return zoomed_in_frame
 
-def draw_ear_between_eyes(frame, landmarks, ear):
+def draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right):
     """
     Draws the EAR score between the eyes on the frame.
 
@@ -118,11 +118,22 @@ def draw_ear_between_eyes(frame, landmarks, ear):
     frame_midpoint_x = int(midpoint_x * frame.shape[1])
     frame_midpoint_y = int(midpoint_y * frame.shape[0])
 
+    frame_left_x = int(left_eye_point[0] * frame.shape[1])
+    frame_left_y = int(left_eye_point[1] * frame.shape[0])
+
+    frame_right_x = int(right_eye_point[0] * frame.shape[1])
+    frame_right_y = int(right_eye_point[1] * frame.shape[0])
 
     #print(f"Midpoint: ({frame_midpoint_x}, {frame_midpoint_y}) left: {left_eye_point} right: {right_eye_point} midpoint: {midpoint_x}, {midpoint_y}")
 
     # Display the EAR score at the calculated midpoint
     cv2.putText(frame, f"EAR: {round(ear, 3)}", (frame_midpoint_x, frame_midpoint_y),
+                cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
+
+    cv2.putText(frame, f"{round(ear_left, 3)}", (frame_left_x, frame_left_y),
+                cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
+
+    cv2.putText(frame, f"{round(ear_right, 3)}", (frame_right_x, frame_right_y),
                 cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
 
 # Example usage in your main loop, after calculating `ear` and having `landmarks`
@@ -222,6 +233,8 @@ def main():
     save_to_influx_every_x_seconds = 5
 
     ear_values = []
+    ear_left_values = []
+    ear_right_values = []
     gaze_values = []
     perclos_values = []
     tired_values = []
@@ -303,7 +316,7 @@ def main():
 
             # compute the EAR score of the eyes
             tX = time.perf_counter()
-            ear = Eye_det.get_EAR(frame=gray, landmarks=landmarks)
+            ear, ear_left, ear_right = Eye_det.get_EAR(frame=gray, landmarks=landmarks)
             if (print_timings):
                 print(f"Time to get EAR: {time.perf_counter() - tX}")
 
@@ -336,15 +349,17 @@ def main():
 
             # compute the Gaze Score
             # tX = time.perf_counter()
-            # gaze = Eye_det.get_Gaze_Score(
-            #     frame=gray, landmarks=landmarks, frame_size=frame_size)
+            gaze = Eye_det.get_Gaze_Score(
+                frame=gray, landmarks=landmarks, frame_size=frame_size)
             # if (print_timings) print(f"Time to get Gaze Score: {time.perf_counter() - tX}")
 
 
             if ear is not None:
                 ear_values.append(ear)
-            # if gaze is not None:
-            #     gaze_values.append(gaze)
+                ear_left_values.append(ear_left)
+                ear_right_values.append(ear_right)
+            if gaze is not None:
+                gaze_values.append(gaze)
 
             # if perclos_score is not None:
             #     perclos_values.append(perclos_score)
@@ -384,7 +399,7 @@ def main():
             if ear is not None:
                 cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50),
                             cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
-                draw_ear_between_eyes(frame, landmarks, ear)
+                draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right)
 
             # show the real-time Gaze Score
             # if gaze is not None:
@@ -460,22 +475,30 @@ def main():
             t_last_save = time.perf_counter()
 
             average_ear = sum(ear_values) / len(ear_values) if ear_values else None
+            average_ear_left = sum(ear_left_values) / len(ear_left_values) if ear_left_values else None
+            average_ear_right = sum(ear_right_values) / len(ear_right_values) if ear_right_values else None
             average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else None
 
-            worst_perclos = max(perclos_values) if perclos_values else None
+            # Just get a friendly number, and presumably less precision is cheaper to store
+            average_ear = int(average_ear * 100)
+            average_ear_left = int(average_ear_left * 100)
+            average_ear_right = int(average_ear_right * 100)
+            average_gaze = int(average_gaze * 1000)
 
-            pct_tired = tired_values.count(True) / len(tired_values) if tired_values else None
-            pct_distracted = distracted_values.count(True) / len(distracted_values) if distracted_values else None
-            pct_looking_away = looking_away_values.count(True) / len(looking_away_values) if looking_away_values else None
+            # worst_perclos = max(perclos_values) if perclos_values else None
+
+            # pct_tired = tired_values.count(True) / len(tired_values) if tired_values else None
+            # pct_distracted = distracted_values.count(True) / len(distracted_values) if distracted_values else None
+            # pct_looking_away = looking_away_values.count(True) / len(looking_away_values) if looking_away_values else None
 
             pct_present = sum(present_values) / len(present_values) if present_values else 0
 
             ear_values = []
             gaze_values = []
-            perclos_values = []
-            tired_values = []
-            distracted_values = []
-            looking_away_values = []
+            # perclos_values = []
+            # tired_values = []
+            # distracted_values = []
+            # looking_away_values = []
             present_values = []
 
 
@@ -492,16 +515,18 @@ def main():
                     value += f",perclosV3={perclos_rolling_score_v3}"
                 if (average_ear != None):
                     value += f",ear={average_ear}"
+                    value += f",earLeft={average_ear_left}"
+                    value += f",earRight={average_ear_right}"
                 if (average_gaze != None):
                     value += f",gaze={average_gaze}"
-                if (worst_perclos != None):
-                    value += f",perclos={worst_perclos}"
-                if (pct_tired != None):
-                    value += f",tired={pct_tired}"
-                if (pct_distracted != None):
-                    value += f",distracted={pct_distracted}"
-                if (pct_looking_away != None):
-                    value += f",lookingAway={pct_looking_away}"
+                # if (worst_perclos != None):
+                #     value += f",perclos={worst_perclos}"
+                # if (pct_tired != None):
+                #     value += f",tired={pct_tired}"
+                # if (pct_distracted != None):
+                #     value += f",distracted={pct_distracted}"
+                # if (pct_looking_away != None):
+                #     value += f",lookingAway={pct_looking_away}"
 
                 value += f" {int(time.time())}"
                 print(f"Writing data to InfluxDB: {value}")

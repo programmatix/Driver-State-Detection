@@ -104,7 +104,7 @@ class EyeDetector:
         # computing the average EAR score
         ear_avg = (ear_left + ear_right) / 2
 
-        return ear_avg
+        return ear_avg, ear_left, ear_right
     
     @staticmethod
     def _calc_1eye_score(landmarks, eye_lms_nums, eye_iris_num, frame_size, frame):

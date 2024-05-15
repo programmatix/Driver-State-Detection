@@ -253,4 +253,5 @@ class AttentionScorer:
         # Determine tiredness based on PERCLOS threshold
         tired = perclos_score >= self.perclos_thresh
 
-        return tired, perclos_score
+        # Multiply just to make a friendlier number
+        return tired, int(perclos_score * 1000)
