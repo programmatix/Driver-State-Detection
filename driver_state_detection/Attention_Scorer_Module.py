@@ -208,8 +208,13 @@ class AttentionScorer:
         # Remove timestamps older than one minute from the current time
         self.eye_closure_timestamps = [timestamp for timestamp in self.eye_closure_timestamps if t_now - timestamp <= save_to_influx_every_x_seconds]
 
-        # Calculate PERCLOS: number of frames with eye closure / total frames in a minute
-        perclos_score = len(self.eye_closure_timestamps) / all_frames_numbers_in_perclos_duration
+        # Check before division
+        if all_frames_numbers_in_perclos_duration > 0:
+            perclos_score = len(self.eye_closure_timestamps) / all_frames_numbers_in_perclos_duration
+        else:
+            # Handle the case where division by zero would occur
+            perclos_score = 0  # Or any default value or handling logic
+
 
         # Determine tiredness based on PERCLOS threshold
         tired = perclos_score >= self.perclos_thresh
@@ -227,15 +232,23 @@ class AttentionScorer:
         # Calculate the number of frames in a minute based on FPS
         all_frames_numbers_in_perclos_duration = int(self.perclos_time_period * fps)
 
+
+
         # If EAR score indicates eyes are closed, add the current timestamp to the list
         if (ear_score is not None) and (ear_score <= self.ear_thresh):
             self.eye_closure_timestamps_v2.append(t_now)
 
         # Remove timestamps older than one minute from the current time
-        self.eye_closure_timestamps_v2 = [timestamp for timestamp in self.eye_closure_timestamps if t_now - timestamp <= self.perclos_time_period]
+        self.eye_closure_timestamps_v2 = [timestamp for timestamp in self.eye_closure_timestamps_v2 if t_now - timestamp <= self.perclos_time_period]
 
-        # Calculate PERCLOS: number of frames with eye closure / total frames in a minute
-        perclos_score = len(self.eye_closure_timestamps_v2) / all_frames_numbers_in_perclos_duration
+
+        # Check before division
+        if all_frames_numbers_in_perclos_duration > 0:
+            perclos_score = len(self.eye_closure_timestamps_v2) / all_frames_numbers_in_perclos_duration
+        else:
+            # Handle the case where division by zero would occur
+            perclos_score = 0  # Or any default value or handling logic
+
 
         # Determine tiredness based on PERCLOS threshold
         tired = perclos_score >= self.perclos_thresh
