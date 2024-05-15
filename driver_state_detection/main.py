@@ -9,6 +9,28 @@ from Utils import get_face_area
 from Eye_Dector_Module import EyeDetector as EyeDet
 from Pose_Estimation_Module import HeadPoseEstimator as HeadPoseEst
 from Attention_Scorer_Module import AttentionScorer as AttScorer
+from influxdb_client_3 import InfluxDBClient3
+
+from dotenv import load_dotenv
+import os
+import socket
+
+hostname = socket.gethostname()
+
+# Load environment variables from .env file
+load_dotenv()
+
+INFLUXDB_URL = os.getenv('INFLUXDB_URL')
+INFLUXDB_TOKEN = os.getenv('INFLUXDB_TOKEN')
+INFLUXDB_ORG = os.getenv('INFLUXDB_ORG')
+INFLUXDB_BUCKET = os.getenv('INFLUXDB_BUCKET')
+
+# Initialize InfluxDB client
+client = InfluxDBClient3(
+    host=INFLUXDB_URL,
+    token=INFLUXDB_TOKEN,
+    database=INFLUXDB_BUCKET
+)
 
 # camera matrix obtained from the camera calibration script, using a 9x6 chessboard
 camera_matrix = np.array(
@@ -128,6 +150,27 @@ def main():
 
     i = 0
     time.sleep(0.01) # To prevent zero division error when calculating the FPS
+    t_last_save = time.perf_counter()
+    t_last_image_save = t_last_save
+
+    save_to_influx_every_x_seconds = 5
+
+    ear_values = []
+    gaze_values = []
+    perclos_values = []
+    tired_values = []
+    distracted_values = []
+    looking_away_values = []
+    present_values = []
+    average_ear = 0
+    average_gaze = 0
+    worst_perclos = 0
+    pct_tired = 0
+    pct_distracted = 0
+    pct_looking_away = 0
+    pct_present = 0
+
+
     while True:  # infinite loop for webcam video capture
         t_now = time.perf_counter()
         fps = i / (t_now - t0)
@@ -161,6 +204,8 @@ def main():
         lms = detector.process(gray).multi_face_landmarks
 
         if lms:  # process the frame only if at least a face is found
+            present_values.append(1)
+
             # getting face landmarks and then take only the bounding box of the biggest face
             landmarks = _get_landmarks(lms)
 
@@ -178,6 +223,15 @@ def main():
             gaze = Eye_det.get_Gaze_Score(
                 frame=gray, landmarks=landmarks, frame_size=frame_size)
 
+
+            if ear is not None:
+                ear_values.append(ear)
+            if gaze is not None:
+                gaze_values.append(gaze)
+
+            if perclos_score is not None:
+                perclos_values.append(perclos_score)
+
             # compute the head pose
             frame_det, roll, pitch, yaw = Head_pose.get_pose(
                 frame=frame, landmarks=landmarks, frame_size=frame_size)
@@ -190,9 +244,18 @@ def main():
                                                                   head_pitch=pitch,
                                                                   head_yaw=yaw)
 
+            tired_values.append(tired)
+            distracted_values.append(distracted)
+            looking_away_values.append(looking_away)
+
+
             # if the head pose estimation is successful, show the results
             if frame_det is not None:
                 frame = frame_det
+
+            adding_to_perclos = (ear is not None) and (ear <= Scorer.ear_thresh)
+            cv2.putText(frame, f"Adding to perclos: {adding_to_perclos}", (10, 260),
+                        cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
 
             # show the real-time EAR score
             if ear is not None:
@@ -202,21 +265,21 @@ def main():
             # show the real-time Gaze Score
             if gaze is not None:
                 cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80),
-                            cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
+                            cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
 
             # show the real-time PERCLOS score
             cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110),
-                        cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
             
-            if roll is not None:
-                cv2.putText(frame, "roll:"+str(roll.round(1)[0]), (450, 40),
-                            cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            if pitch is not None:
-                cv2.putText(frame, "pitch:"+str(pitch.round(1)[0]), (450, 70),
-                            cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            if yaw is not None:
-                cv2.putText(frame, "yaw:"+str(yaw.round(1)[0]), (450, 100),
-                            cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # if roll is not None:
+            #     cv2.putText(frame, "roll:"+str(roll.round(1)[0]), (450, 40),
+            #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # if pitch is not None:
+            #     cv2.putText(frame, "pitch:"+str(pitch.round(1)[0]), (450, 70),
+            #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+            # if yaw is not None:
+            #     cv2.putText(frame, "yaw:"+str(yaw.round(1)[0]), (450, 100),
+            #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
             
 
             # if the driver is tired, show and alert on screen
@@ -234,6 +297,79 @@ def main():
             if distracted:
                 cv2.putText(frame, "DISTRACTED!", (10, 340),
                             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+
+            # cv2.putText(frame, str(time.perf_counter() - t_last_save), (10, 360),
+            #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+
+        else:
+            present_values.append(1)
+
+        cv2.putText(frame, f"Avg ear: {average_ear}", (10, 360),
+                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Avg gaze: {average_gaze}", (10, 380),
+                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Worst perclos: {worst_perclos}", (10, 400),
+                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Pct tired: {pct_tired}", (10, 420),
+                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Pct distracted: {pct_distracted}", (10, 440),
+                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Pct looking away: {pct_looking_away}", (10, 460),
+                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Pct present: {pct_present}", (10, 480),
+                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+
+        if (time.perf_counter() - t_last_image_save) > (60 * 20):
+            t_last_image_save = time.perf_counter()
+            cv2.imwrite(f"output_images/{t_last_save}.jpg", frame)
+            print("Image saved successfully.")
+
+        if (time.perf_counter() - t_last_save) > save_to_influx_every_x_seconds:
+            t_last_save = time.perf_counter()
+
+            average_ear = sum(ear_values) / len(ear_values) if ear_values else 0
+            average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else 0
+
+            worst_perclos = max(perclos_values) if perclos_values else 0
+
+            pct_tired = tired_values.count(True) / len(tired_values) if tired_values else 0
+            pct_distracted = distracted_values.count(True) / len(distracted_values) if distracted_values else 0
+            pct_looking_away = looking_away_values.count(True) / len(looking_away_values) if looking_away_values else 0
+
+            pct_present = sum(present_values) / len(present_values) if present_values else 0
+
+            ear_values = []
+            gaze_values = []
+            perclos_values = []
+            tired_values = []
+            distracted_values = []
+            looking_away_values = []
+            present_values = []
+
+
+            # Write data point to the "XL" bucket
+            try:
+                # Names do go on the wire but take minimal space in db
+                client.write([
+                    f"fatigue,host={hostname} "
+                    f"ear={average_ear},"
+                    f"gaze={average_gaze},"
+                    f"perclos={worst_perclos},"
+                    f"distracted={pct_distracted},"
+                    f"tired={pct_tired},"
+                    f"lookingAway={pct_looking_away},"
+                    f"present={pct_present}"
+                    f" {int(time.time())}"
+                ],write_precision='s')
+                print("Data written successfully to InfluxDB.")
+            except Exception as e:
+                # Improved error message
+                error_type = type(e).__name__
+                print(f"Failed to write data to InfluxDB due to {error_type}: {e}")
+                print("Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
+
+
+
 
         # stop the tick counter for computing the processing time for each frame
         e2 = cv2.getTickCount()
