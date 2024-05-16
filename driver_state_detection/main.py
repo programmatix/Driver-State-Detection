@@ -4,7 +4,7 @@ import argparse
 import cv2
 import numpy as np
 import mediapipe as mp
-
+import math
 from Utils import get_face_area
 from Eye_Dector_Module import EyeDetector as EyeDet
 from Pose_Estimation_Module import HeadPoseEstimator as HeadPoseEst
@@ -15,6 +15,7 @@ from RealTimePERCLOSPlot import RealTimePERCLOSPlot
 from dotenv import load_dotenv
 import os
 import socket
+from BlinkDetector import BlinkDetector
 
 hostname = socket.gethostname()
 
@@ -251,11 +252,18 @@ def main():
 
     print_timings = False
 
+
+    # 0.20 too sensitive
+    # 0.05 not picking up
+    blink_detector = BlinkDetector(ear_threshold=0.1)  # Set your EAR threshold
+
     # Example usage
     ear_plotter = RealTimeEARPlot()
     perclos_plotter = RealTimePERCLOSPlot()
     while True:  # infinite loop for webcam video capture
         t_now = time.perf_counter()
+        period_start_time = time.perf_counter()
+
         fps = i / (t_now - t0)
         if fps == 0:
             fps = 10
@@ -270,7 +278,7 @@ def main():
         if args.camera == 0:
             frame = cv2.flip(frame, 2)
 
-        frame = zoom_in(frame)
+        frame = zoom_in(frame, 2)
 
         # start the tick counter for computing the processing time for each frame
         e1 = cv2.getTickCount()
@@ -355,6 +363,7 @@ def main():
 
 
             if ear is not None:
+                blink_detector.update_ear(ear)
                 ear_values.append(ear)
                 ear_left_values.append(ear_left)
                 ear_right_values.append(ear_right)
@@ -474,16 +483,22 @@ def main():
         if (time.perf_counter() - t_last_save) > save_to_influx_every_x_seconds:
             t_last_save = time.perf_counter()
 
+            blink_count_per_min, blink_durations = blink_detector.get_blink_data()
+            print(f"Blink Count: {blink_count_per_min}, Blink Durations: {blink_durations}")
+            # Save blink_count and blink_durations to InfluxDB or any storage
+
+            blink_durations = int(blink_durations * 1000)  # Convert to milliseconds
+
             average_ear = sum(ear_values) / len(ear_values) if ear_values else None
             average_ear_left = sum(ear_left_values) / len(ear_left_values) if ear_left_values else None
             average_ear_right = sum(ear_right_values) / len(ear_right_values) if ear_right_values else None
             average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else None
 
             # Just get a friendly number, and presumably less precision is cheaper to store
-            average_ear = int(average_ear * 100)
-            average_ear_left = int(average_ear_left * 100)
-            average_ear_right = int(average_ear_right * 100)
-            average_gaze = int(average_gaze * 1000)
+            average_ear = int(average_ear * 100) if (average_ear  is not None and not math.isinf(average_ear)) else None
+            average_ear_left = int(average_ear_left * 100) if (average_ear_left  is not None and not math.isinf(average_ear_left)) else None
+            average_ear_right = int(average_ear_right * 100) if (average_ear_right is not None and not math.isinf(average_ear_right)) else None
+            average_gaze = int(average_gaze * 1000) if (average_gaze is not None and not math.isinf(average_gaze)) else None
 
             # worst_perclos = max(perclos_values) if perclos_values else None
 
@@ -519,6 +534,13 @@ def main():
                     value += f",earRight={average_ear_right}"
                 if (average_gaze != None):
                     value += f",gaze={average_gaze}"
+
+
+                if (blink_count_per_min != None):
+                    value += f",blinks={blink_count_per_min}"
+                # Already a rolling average
+                if (blink_durations != None):
+                    value += f",blinkDurations={blink_durations}"
                 # if (worst_perclos != None):
                 #     value += f",perclos={worst_perclos}"
                 # if (pct_tired != None):
