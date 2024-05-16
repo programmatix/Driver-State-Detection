@@ -495,10 +495,10 @@ def main():
             average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else None
 
             # Just get a friendly number, and presumably less precision is cheaper to store
-            average_ear = int(average_ear * 100) if (average_ear  is not None and not math.isinf(average_ear)) else None
-            average_ear_left = int(average_ear_left * 100) if (average_ear_left  is not None and not math.isinf(average_ear_left)) else None
-            average_ear_right = int(average_ear_right * 100) if (average_ear_right is not None and not math.isinf(average_ear_right)) else None
-            average_gaze = int(average_gaze * 1000) if (average_gaze is not None and not math.isinf(average_gaze)) else None
+            average_ear = int(average_ear * 100) if (average_ear  is not None and not math.isnan(average_ear) and not math.isinf(average_ear)) else None
+            average_ear_left = int(average_ear_left * 100) if (average_ear_left  is not None and not math.isnan(average_ear_left) and not math.isinf(average_ear_left)) else None
+            average_ear_right = int(average_ear_right * 100) if (average_ear_right is not None and not math.isnan(average_ear_right) and not math.isinf(average_ear_right)) else None
+            average_gaze = int(average_gaze * 1000) if (average_gaze is not None and not math.isnan(average_gaze) and not math.isinf(average_gaze)) else None
 
             # worst_perclos = max(perclos_values) if perclos_values else None
 
@@ -536,11 +536,13 @@ def main():
                     value += f",gaze={average_gaze}"
 
 
-                if (blink_count_per_min != None):
-                    value += f",blinks={blink_count_per_min}"
-                # Already a rolling average
-                if (blink_durations != None):
-                    value += f",blinkDurations={blink_durations}"
+                # Don't record blinks if I'm not at the computer
+                if (pct_present > 0.8):
+                    if (blink_count_per_min != None):
+                        value += f",blinks={blink_count_per_min}"
+                    # Already a rolling average
+                    if (blink_durations != None):
+                        value += f",blinkDurations={blink_durations}"
                 # if (worst_perclos != None):
                 #     value += f",perclos={worst_perclos}"
                 # if (pct_tired != None):
@@ -578,7 +580,7 @@ def main():
         cv2.imshow("Press 'q' to terminate", frame)
 
         # if the key "q" is pressed on the keyboard, the program is terminated
-        if cv2.waitKey(20) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
         
         i += 1
