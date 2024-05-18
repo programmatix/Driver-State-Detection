@@ -1,3 +1,8 @@
+# start "" /high python main.py
+
+import threading
+import os
+import psutil
 import cv2
 import threading
 import queue
@@ -22,6 +27,7 @@ from dotenv import load_dotenv
 import os
 import socket
 from BlinkDetector import BlinkDetector
+#from hdrhistogram import HdrHistogram
 
 hostname = socket.gethostname()
 
@@ -149,8 +155,24 @@ frame_queue2 = queue.Queue()
 
 print_timings = False
 
+import win32api,win32process,win32con
+
+# We need high priority otherwise FPS goes way down when we alt-tab away
+pid = win32api.GetCurrentProcessId()
+handle = win32api.OpenProcess(win32con.PROCESS_ALL_ACCESS, True, pid)
+win32process.SetPriorityClass(handle, win32process.HIGH_PRIORITY_CLASS)
+
 def capture_frames():
+    # p = psutil.Process(os.getpid())
+    # # Set the process priority to above normal, this can be adjusted to your needs
+    # p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+    # # Additionally, set the thread priority if needed
+    # threading.current_thread().priority = threading.PRIORITY_HIGHEST
+
     cap = cv2.VideoCapture(0)
+    # cap.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
+    cap.set(cv2.VIDEO_ACCELERATION_ANY, 1)
+    #histogram = HdrHistogram()
     while True:
         tX = time.perf_counter()
         ret, frame = cap.read()
@@ -159,9 +181,13 @@ def capture_frames():
             time.sleep(1)
             cap = cv2.VideoCapture(0)
         if (print_timings):
+            #histogram.record_value((time.perf_counter() - tX) * 1000)
             print(f"Time to read frame: {(time.perf_counter() - tX) * 1000}")
         frame_queue1.put(frame)
         frame_queue2.put(frame)
+
+        #Every second display histogram
+
 
 def save_frames():
     frame_idx = 0
@@ -177,7 +203,7 @@ def save_frames():
         timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S") + "-" + str(frame_idx)
         frame_idx += 1
         filename = f"output_images/{timestamp}.jpg"
-        cv2.imwrite(filename, frame)
+        # cv2.imwrite(filename, frame)
         # print(f"Saved {filename}")
 
         prev_second = current_second  # Update the previous second
@@ -297,7 +323,7 @@ def process_frames():
             t_now = time.perf_counter()
             period_start_time = time.perf_counter()
 
-            fps = i / (t_now - t0)
+            fps = i / (t_now - t_last_save)
             if fps == 0:
                 fps = 10
 
@@ -555,6 +581,7 @@ def process_frames():
 
                 pct_present = sum(present_values) / len(present_values) if present_values else 0
 
+                i = 0
                 ear_values = []
                 ear_left_values = []
                 ear_right_values = []
