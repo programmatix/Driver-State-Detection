@@ -219,8 +219,9 @@ def main():
     # capture the input from the default system camera (camera number 0)
     cap = cv2.VideoCapture(args.camera)
     # Set webcam resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    print(f"Capture FPS ${cap.get(cv2.CAP_PROP_FPS)} height cap.get(cv2.CAP_PROP_FRAME_HEIGHT)")
 
     if not cap.isOpened():  # if the camera can't be opened exit the program
         print("Cannot open camera")
@@ -268,14 +269,22 @@ def main():
         if fps == 0:
             fps = 10
 
+        # read a frame from the webcam
+        # We will just block here until the next frame is available, so our FPS can never be higher than the webcam's
         tX = time.perf_counter()
-        ret, frame = cap.read()  # read a frame from the webcam
+        ret, frame = cap.read()
         if (print_timings):
             print(f"Time to read frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
         if not ret:  # if a frame can't be read, exit the program
             print("Can't receive frame from camera/stream end")
-            break
+            time.sleep(1)
+            cap = cv2.VideoCapture(args.camera)
+            # Set webcam resolution
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+
+            continue
 
          # if the frame comes from webcam, flip it so it looks like a mirror.
         tX = time.perf_counter()
@@ -426,11 +435,23 @@ def main():
             # cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110),
             #             cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
             #
-            # cv2.putText(frame, "PERCLOS ROLLING (V3):" + str(round(perclos_rolling_score_v3, 3)), (10, 140),
-            #             cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
-            #
-            # cv2.putText(frame, "PERCLOS ROLLING (V2):" + str(round(perclos_rolling_score_v2, 3)), (10, 170),
-            #             cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+            if perclos_rolling_score_v3 is not None:
+                cv2.putText(frame, "PERCLOS ROLLING (V3):" + str(round(perclos_rolling_score_v3, 3)), (10, 140),
+                            cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+            if perclos_rolling_score_v2 is not None:
+                cv2.putText(frame, "PERCLOS ROLLING (V2):" + str(round(perclos_rolling_score_v2, 3)), (10, 170),
+                            cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+            blink_count_per_min, blink_durations = blink_detector.get_blink_data()
+
+            if blink_count_per_min is not None:
+                cv2.putText(frame, "BLINK COUNT:" + str(round(blink_count_per_min, 3)), (10, 200),
+                            cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+            if blink_durations is not None:
+                cv2.putText(frame, "BLINK DURATION:" + str(round(blink_durations, 3)), (10, 230),
+                            cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
 
 
 
@@ -467,20 +488,20 @@ def main():
         else:
             present_values.append(0)
 
-        cv2.putText(frame, f"Avg ear: {average_ear}", (10, 360),
-                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"Avg gaze: {average_gaze}", (10, 380),
-                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"Worst perclos: {worst_perclos}", (10, 400),
-                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"Pct tired: {pct_tired}", (10, 420),
-                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"Pct distracted: {pct_distracted}", (10, 440),
-                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"Pct looking away: {pct_looking_away}", (10, 460),
-                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"Pct present: {pct_present}", (10, 480),
-                    cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        # cv2.putText(frame, f"Avg ear: {average_ear}", (10, 360),
+        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        # cv2.putText(frame, f"Avg gaze: {average_gaze}", (10, 380),
+        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        # cv2.putText(frame, f"Worst perclos: {worst_perclos}", (10, 400),
+        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        # cv2.putText(frame, f"Pct tired: {pct_tired}", (10, 420),
+        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        # cv2.putText(frame, f"Pct distracted: {pct_distracted}", (10, 440),
+        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        # cv2.putText(frame, f"Pct looking away: {pct_looking_away}", (10, 460),
+        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+        # cv2.putText(frame, f"Pct present: {pct_present}", (10, 480),
+        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
 
         if (time.perf_counter() - t_last_image_save) > (60 * 20):
             t_last_image_save = time.perf_counter()
@@ -516,6 +537,9 @@ def main():
             pct_present = sum(present_values) / len(present_values) if present_values else 0
 
             ear_values = []
+            ear_left_values = []
+            ear_right_values = []
+
             gaze_values = []
             # perclos_values = []
             # tired_values = []
