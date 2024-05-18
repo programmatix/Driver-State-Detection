@@ -1,3 +1,9 @@
+import cv2
+import threading
+import queue
+import time
+from datetime import datetime
+
 import time
 import argparse
 
@@ -48,7 +54,7 @@ def _get_landmarks(lms):
     surface = 0
     for lms0 in lms:
         landmarks = [np.array([point.x, point.y, point.z]) \
-                        for point in lms0.landmark]
+                     for point in lms0.landmark]
 
         landmarks = np.array(landmarks)
 
@@ -62,7 +68,7 @@ def _get_landmarks(lms):
         new_surface = dx * dy
         if new_surface > surface:
             biggest_face = landmarks
-    
+
     return biggest_face
 
 def zoom_in(frame, zoom_factor=2):
@@ -137,502 +143,524 @@ def draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right):
     cv2.putText(frame, f"{round(ear_right, 3)}", (frame_right_x, frame_right_y),
                 cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
 
-# Example usage in your main loop, after calculating `ear` and having `landmarks`
-def main():
+# Create a thread-safe queue
+frame_queue1 = queue.Queue()
+frame_queue2 = queue.Queue()
 
-    parser = argparse.ArgumentParser(description='Driver State Detection')
+print_timings = False
 
-    # selection the camera number, default is 0 (webcam)
-    parser.add_argument('-c', '--camera', type=int,
-                        default=0, metavar='', help='Camera number, default is 0 (webcam)')
-
-    # TODO: add option for choose if use camera matrix and dist coeffs
-
-    # visualisation parameters
-    parser.add_argument('--show_fps', type=bool, default=True,
-                        metavar='', help='Show the actual FPS of the capture stream, default is true')
-    parser.add_argument('--show_proc_time', type=bool, default=True,
-                        metavar='', help='Show the processing time for a single frame, default is true')
-    parser.add_argument('--show_eye_proc', type=bool, default=False,
-                        metavar='', help='Show the eyes processing, deafult is false')
-    parser.add_argument('--show_axis', type=bool, default=True,
-                        metavar='', help='Show the head pose axis, default is true')
-    parser.add_argument('--verbose', type=bool, default=False,
-                        metavar='', help='Prints additional info, default is false')
-
-    # Attention Scorer parameters (EAR, Gaze Score, Pose)
-    parser.add_argument('--smooth_factor', type=float, default=0.5,
-                        metavar='', help='Sets the smooth factor for the head pose estimation keypoint smoothing, default is 0.5')
-    parser.add_argument('--ear_thresh', type=float, default=0.15,
-                        metavar='', help='Sets the EAR threshold for the Attention Scorer, default is 0.15')
-    parser.add_argument('--ear_time_thresh', type=float, default=2,
-                        metavar='', help='Sets the EAR time (seconds) threshold for the Attention Scorer, default is 2 seconds')
-    parser.add_argument('--gaze_thresh', type=float, default=0.015,
-                        metavar='', help='Sets the Gaze Score threshold for the Attention Scorer, default is 0.2')
-    parser.add_argument('--gaze_time_thresh', type=float, default=2, metavar='',
-                        help='Sets the Gaze Score time (seconds) threshold for the Attention Scorer, default is 2. seconds')
-    parser.add_argument('--pitch_thresh', type=float, default=20,
-                        metavar='', help='Sets the PITCH threshold (degrees) for the Attention Scorer, default is 30 degrees')
-    parser.add_argument('--yaw_thresh', type=float, default=20,
-                        metavar='', help='Sets the YAW threshold (degrees) for the Attention Scorer, default is 20 degrees')
-    parser.add_argument('--roll_thresh', type=float, default=20,
-                        metavar='', help='Sets the ROLL threshold (degrees) for the Attention Scorer, default is 30 degrees')
-    parser.add_argument('--pose_time_thresh', type=float, default=2.5,
-                        metavar='', help='Sets the Pose time threshold (seconds) for the Attention Scorer, default is 2.5 seconds')
-
-    # parse the arguments and store them in the args variable dictionary
-    args = parser.parse_args()
-
-    if args.verbose:
-        print(f"Arguments and Parameters used:\n{args}\n")
-
-    # if not cv2.useOptimized():
-    #     try:
-    #         cv2.setUseOptimized(True)  # set OpenCV optimization to True
-    #     except:
-    #         print(
-    #             "OpenCV optimization could not be set to True, the script may be slower than expected")
-
-    """instantiation of mediapipe face mesh model. This model give back 478 landmarks
-    if the rifine_landmarks parameter is set to True. 468 landmarks for the face and
-    the last 10 landmarks for the irises
-    """
-    detector = mp.solutions.face_mesh.FaceMesh(static_image_mode=False,
-                                               min_detection_confidence=0.5,
-                                               min_tracking_confidence=0.5,
-                                               refine_landmarks=True)
-
-    # instantiation of the eye detector and pose estimator objects
-    Eye_det = EyeDet(show_processing=args.show_eye_proc)
-
-    Head_pose = HeadPoseEst(show_axis=args.show_axis)
-
-    # instantiation of the attention scorer object, with the various thresholds
-    # NOTE: set verbose to True for additional printed information about the scores
-    t0 = time.perf_counter()
-    Scorer = AttScorer(t_now=t0, ear_thresh=args.ear_thresh, gaze_time_thresh=args.gaze_time_thresh,
-                       roll_thresh=args.roll_thresh, pitch_thresh=args.pitch_thresh,
-                       yaw_thresh=args.yaw_thresh, ear_time_thresh=args.ear_time_thresh,
-                       gaze_thresh=args.gaze_thresh, pose_time_thresh=args.pose_time_thresh,
-                       verbose=args.verbose)
-
-    # capture the input from the default system camera (camera number 0)
-    cap = cv2.VideoCapture(args.camera)
-    # Set webcam resolution
-    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-    print(f"Capture FPS ${cap.get(cv2.CAP_PROP_FPS)} height cap.get(cv2.CAP_PROP_FRAME_HEIGHT)")
-
-    if not cap.isOpened():  # if the camera can't be opened exit the program
-        print("Cannot open camera")
-        exit()
-
-    i = 0
-    time.sleep(0.01) # To prevent zero division error when calculating the FPS
-    t_last_save = time.perf_counter()
-    t_last_image_save = t_last_save
-
-    save_to_influx_every_x_seconds = 5
-
-    ear_values = []
-    ear_left_values = []
-    ear_right_values = []
-    gaze_values = []
-    perclos_values = []
-    tired_values = []
-    distracted_values = []
-    looking_away_values = []
-    present_values = []
-    average_ear = 0
-    average_gaze = 0
-    worst_perclos = 0
-    pct_tired = 0
-    pct_distracted = 0
-    pct_looking_away = 0
-    pct_present = 0
-
-    print_timings = False
-
-
-    # 0.20 too sensitive
-    # 0.05 not picking up
-    blink_detector = BlinkDetector(ear_threshold=0.1)  # Set your EAR threshold
-
-    # Example usage
-    ear_plotter = RealTimeEARPlot()
-    perclos_plotter = RealTimePERCLOSPlot()
-    while True:  # infinite loop for webcam video capture
-        t_now = time.perf_counter()
-        period_start_time = time.perf_counter()
-
-        fps = i / (t_now - t0)
-        if fps == 0:
-            fps = 10
-
-        # read a frame from the webcam
-        # We will just block here until the next frame is available, so our FPS can never be higher than the webcam's
+def capture_frames():
+    cap = cv2.VideoCapture(0)
+    while True:
         tX = time.perf_counter()
         ret, frame = cap.read()
-        if (print_timings):
-            print(f"Time to read frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-
-        if not ret:  # if a frame can't be read, exit the program
+        if not ret:
             print("Can't receive frame from camera/stream end")
             time.sleep(1)
-            cap = cv2.VideoCapture(args.camera)
-            # Set webcam resolution
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-
-            continue
-
-         # if the frame comes from webcam, flip it so it looks like a mirror.
-        tX = time.perf_counter()
-        if args.camera == 0:
-            frame = cv2.flip(frame, 2)
-
-        frame = zoom_in(frame, 2)
+            cap = cv2.VideoCapture(0)
         if (print_timings):
-            print(f"Time to process frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+            print(f"Time to read frame: {(time.perf_counter() - tX) * 1000}")
+        frame_queue1.put(frame)
+        frame_queue2.put(frame)
 
-        # start the tick counter for computing the processing time for each frame
-        e1 = cv2.getTickCount()
+def save_frames():
+    frame_idx = 0
+    prev_second = None
+    while True:
+        frame = frame_queue1.get()
+        current_time = datetime.now()
+        current_second = current_time.strftime("%S")
 
-        # transform the BGR frame in grayscale
-        tX = time.perf_counter()
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        if (print_timings):
-            print(f"Time to convert to grayscale: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+        if prev_second is None or prev_second != current_second:
+            frame_idx = 0  # Reset frame index for each new second
 
-        # get the frame size
-        frame_size = frame.shape[1], frame.shape[0]
+        timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S") + "-" + str(frame_idx)
+        frame_idx += 1
+        filename = f"output_images/{timestamp}.jpg"
+        cv2.imwrite(filename, frame)
+        # print(f"Saved {filename}")
 
-        # apply a bilateral filter to lower noise but keep frame details. create a 3D matrix from gray image to give it to the model
-        tX = time.perf_counter()
-        gray = np.expand_dims(cv2.bilateralFilter(gray, 5, 10, 10), axis=2)
-        gray = np.concatenate([gray, gray, gray], axis=2)
-        if (print_timings):
-            print(f"Time to bilateral filter: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+        prev_second = current_second  # Update the previous second
 
-        # find the faces using the face mesh model
-        tX = time.perf_counter()
-        lms = detector.process(gray).multi_face_landmarks
-        if (print_timings):
-            print(f"Time to find faces: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+def process_frames():
+    try:
+        parser = argparse.ArgumentParser(description='Driver State Detection')
 
-        perclos_rolling_score_v2 = None
+        # selection the camera number, default is 0 (webcam)
+        parser.add_argument('-c', '--camera', type=int,
+                            default=0, metavar='', help='Camera number, default is 0 (webcam)')
 
-        if lms:  # process the frame only if at least a face is found
-            present_values.append(1)
+        # TODO: add option for choose if use camera matrix and dist coeffs
 
-            # getting face landmarks and then take only the bounding box of the biggest face
+        # visualisation parameters
+        parser.add_argument('--show_fps', type=bool, default=True,
+                            metavar='', help='Show the actual FPS of the capture stream, default is true')
+        parser.add_argument('--show_proc_time', type=bool, default=True,
+                            metavar='', help='Show the processing time for a single frame, default is true')
+        parser.add_argument('--show_eye_proc', type=bool, default=False,
+                            metavar='', help='Show the eyes processing, deafult is false')
+        parser.add_argument('--show_axis', type=bool, default=True,
+                            metavar='', help='Show the head pose axis, default is true')
+        parser.add_argument('--verbose', type=bool, default=False,
+                            metavar='', help='Prints additional info, default is false')
+
+        # Attention Scorer parameters (EAR, Gaze Score, Pose)
+        parser.add_argument('--smooth_factor', type=float, default=0.5,
+                            metavar='', help='Sets the smooth factor for the head pose estimation keypoint smoothing, default is 0.5')
+        parser.add_argument('--ear_thresh', type=float, default=0.15,
+                            metavar='', help='Sets the EAR threshold for the Attention Scorer, default is 0.15')
+        parser.add_argument('--ear_time_thresh', type=float, default=2,
+                            metavar='', help='Sets the EAR time (seconds) threshold for the Attention Scorer, default is 2 seconds')
+        parser.add_argument('--gaze_thresh', type=float, default=0.015,
+                            metavar='', help='Sets the Gaze Score threshold for the Attention Scorer, default is 0.2')
+        parser.add_argument('--gaze_time_thresh', type=float, default=2, metavar='',
+                            help='Sets the Gaze Score time (seconds) threshold for the Attention Scorer, default is 2. seconds')
+        parser.add_argument('--pitch_thresh', type=float, default=20,
+                            metavar='', help='Sets the PITCH threshold (degrees) for the Attention Scorer, default is 30 degrees')
+        parser.add_argument('--yaw_thresh', type=float, default=20,
+                            metavar='', help='Sets the YAW threshold (degrees) for the Attention Scorer, default is 20 degrees')
+        parser.add_argument('--roll_thresh', type=float, default=20,
+                            metavar='', help='Sets the ROLL threshold (degrees) for the Attention Scorer, default is 30 degrees')
+        parser.add_argument('--pose_time_thresh', type=float, default=2.5,
+                            metavar='', help='Sets the Pose time threshold (seconds) for the Attention Scorer, default is 2.5 seconds')
+
+        # parse the arguments and store them in the args variable dictionary
+        args = parser.parse_args()
+
+        if args.verbose:
+            print(f"Arguments and Parameters used:\n{args}\n")
+
+        # if not cv2.useOptimized():
+        #     try:
+        #         cv2.setUseOptimized(True)  # set OpenCV optimization to True
+        #     except:
+        #         print(
+        #             "OpenCV optimization could not be set to True, the script may be slower than expected")
+
+        """instantiation of mediapipe face mesh model. This model give back 478 landmarks
+        if the rifine_landmarks parameter is set to True. 468 landmarks for the face and
+        the last 10 landmarks for the irises
+        """
+        detector = mp.solutions.face_mesh.FaceMesh(static_image_mode=False,
+                                                   min_detection_confidence=0.5,
+                                                   min_tracking_confidence=0.5,
+                                                   refine_landmarks=True)
+
+        # instantiation of the eye detector and pose estimator objects
+        Eye_det = EyeDet(show_processing=args.show_eye_proc)
+
+        Head_pose = HeadPoseEst(show_axis=args.show_axis)
+
+        # instantiation of the attention scorer object, with the various thresholds
+        # NOTE: set verbose to True for additional printed information about the scores
+        t0 = time.perf_counter()
+        Scorer = AttScorer(t_now=t0, ear_thresh=args.ear_thresh, gaze_time_thresh=args.gaze_time_thresh,
+                           roll_thresh=args.roll_thresh, pitch_thresh=args.pitch_thresh,
+                           yaw_thresh=args.yaw_thresh, ear_time_thresh=args.ear_time_thresh,
+                           gaze_thresh=args.gaze_thresh, pose_time_thresh=args.pose_time_thresh,
+                           verbose=args.verbose)
+
+        i = 0
+        time.sleep(0.01) # To prevent zero division error when calculating the FPS
+        t_last_save = time.perf_counter()
+        t_last_image_save = t_last_save
+
+        save_to_influx_every_x_seconds = 5
+
+        ear_values = []
+        ear_left_values = []
+        ear_right_values = []
+        gaze_values = []
+        perclos_values = []
+        tired_values = []
+        distracted_values = []
+        looking_away_values = []
+        present_values = []
+        average_ear = 0
+        average_gaze = 0
+        worst_perclos = 0
+        pct_tired = 0
+        pct_distracted = 0
+        pct_looking_away = 0
+        pct_present = 0
+
+
+        # 0.20 too sensitive
+        # 0.05 not picking up
+        blink_detector = BlinkDetector(ear_threshold=0.1)  # Set your EAR threshold
+
+        # Example usage
+        ear_plotter = RealTimeEARPlot()
+        perclos_plotter = RealTimePERCLOSPlot()
+
+        while True:
+            t_now = time.perf_counter()
+            period_start_time = time.perf_counter()
+
+            fps = i / (t_now - t0)
+            if fps == 0:
+                fps = 10
+
+            frame = frame_queue2.get()
+
+            #print("Got frame for processing")
+
+            # if the frame comes from webcam, flip it so it looks like a mirror.
             tX = time.perf_counter()
-            landmarks = _get_landmarks(lms)
+            if args.camera == 0:
+                frame = cv2.flip(frame, 2)
+
+            frame = zoom_in(frame, 2)
             if (print_timings):
-                print(f"Time to get landmarks: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+                print(f"Time to process frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
-            # shows the eye keypoints (can be commented)
-            # tX = time.perf_counter()
-            # Eye_det.show_eye_keypoints(
-            #     color_frame=frame, landmarks=landmarks, frame_size=frame_size)
-            # if (print_timings) print(f"Time to show eye keypoints: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+            # start the tick counter for computing the processing time for each frame
+            e1 = cv2.getTickCount()
 
-            # compute the EAR score of the eyes
+            # transform the BGR frame in grayscale
             tX = time.perf_counter()
-            ear, ear_left, ear_right = Eye_det.get_EAR(frame=gray, landmarks=landmarks)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if (print_timings):
-                print(f"Time to get EAR: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+                print(f"Time to convert to grayscale: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
+            # get the frame size
+            frame_size = frame.shape[1], frame.shape[0]
 
-            # Assuming `frame` is your current video frame and `ear` is the current EAR score
-            # tX = time.perf_counter()
-            # ear_plotter.update_ear_scores(ear)  # Update the plot data
-            # ear_plotter.overlay_graph_on_frame(frame)  # Overlay the graph on the frame
-            # if (print_timings) print(f"Time to update and overlay graph: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-
-
-            # Display the frame with the overlay
-
-            #cv2.imshow('Frame with EAR Graph', frame)
-
-
-            # compute the PERCLOS score and state of tiredness
+            # apply a bilateral filter to lower noise but keep frame details. create a 3D matrix from gray image to give it to the model
             tX = time.perf_counter()
-            # tired, perclos_score = Scorer.get_PERCLOS(t_now, fps, ear)
-
-            # _, perclos_rolling_score_v2 = Scorer.get_PERCLOS_rolling_v2(t_now, fps, ear, save_to_influx_every_x_seconds)
-            _, perclos_rolling_score_v3 = Scorer.get_PERCLOS_rolling_v3(t_now, fps, ear)
+            gray = np.expand_dims(cv2.bilateralFilter(gray, 5, 10, 10), axis=2)
+            gray = np.concatenate([gray, gray, gray], axis=2)
             if (print_timings):
-                print(f"Time to get PERCLOS: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+                print(f"Time to bilateral filter: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
-            # tX = time.perf_counter()
-            # perclos_plotter.update_ear_scores(perclos_rolling_score_v3)  # Update the plot data
-            # perclos_plotter.overlay_graph_on_frame(frame)  # Overlay the graph on the frame
-            # if (print_timings) print(f"Time to update and overlay graph: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-
-            # compute the Gaze Score
+            # find the faces using the face mesh model
             tX = time.perf_counter()
-            gaze = Eye_det.get_Gaze_Score(
-                frame=gray, landmarks=landmarks, frame_size=frame_size)
+            lms = detector.process(gray).multi_face_landmarks
             if (print_timings):
-                print(f"Time to get Gaze Score: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+                print(f"Time to find faces: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
+            perclos_rolling_score_v2 = None
+
+            if lms:  # process the frame only if at least a face is found
+                present_values.append(1)
+
+                # getting face landmarks and then take only the bounding box of the biggest face
+                tX = time.perf_counter()
+                landmarks = _get_landmarks(lms)
+                if (print_timings):
+                    print(f"Time to get landmarks: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
+                # shows the eye keypoints (can be commented)
+                # tX = time.perf_counter()
+                # Eye_det.show_eye_keypoints(
+                #     color_frame=frame, landmarks=landmarks, frame_size=frame_size)
+                # if (print_timings) print(f"Time to show eye keypoints: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
+                # compute the EAR score of the eyes
+                tX = time.perf_counter()
+                ear, ear_left, ear_right = Eye_det.get_EAR(frame=gray, landmarks=landmarks)
+                if (print_timings):
+                    print(f"Time to get EAR: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
 
-            if ear is not None:
-                blink_detector.update_ear(ear)
-                ear_values.append(ear)
-                ear_left_values.append(ear_left)
-                ear_right_values.append(ear_right)
-            if gaze is not None:
-                gaze_values.append(gaze)
-
-            # if perclos_score is not None:
-            #     perclos_values.append(perclos_score)
-
-            # compute the head pose
-            # tX = time.perf_counter()
-            # frame_det, roll, pitch, yaw = Head_pose.get_pose(
-            #     frame=frame, landmarks=landmarks, frame_size=frame_size)
-            # if (print_timings):
-            #     print(f"Time to get head pose: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-            
-             # evaluate the scores for EAR, GAZE and HEAD POSE
-            # tX = time.perf_counter()
-            # asleep, looking_away, distracted = Scorer.eval_scores(t_now=t_now,
-            #                                                       ear_score=ear,
-            #                                                       gaze_score=gaze,
-            #                                                       head_roll=roll,
-            #                                                       head_pitch=pitch,
-            #                                                       head_yaw=yaw)
-            # if (print_timings) print(f"Time to evaluate scores: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-
-            # tired_values.append(tired)
-            # distracted_values.append(distracted)
-            # looking_away_values.append(looking_away)
+                # Assuming `frame` is your current video frame and `ear` is the current EAR score
+                # tX = time.perf_counter()
+                # ear_plotter.update_ear_scores(ear)  # Update the plot data
+                # ear_plotter.overlay_graph_on_frame(frame)  # Overlay the graph on the frame
+                # if (print_timings) print(f"Time to update and overlay graph: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
 
-            # if the head pose estimation is successful, show the results
-            # if frame_det is not None:
-            #     frame = frame_det
+                # Display the frame with the overlay
+
+                #cv2.imshow('Frame with EAR Graph', frame)
 
 
-            # adding_to_perclos = (ear is not None) and (ear <= Scorer.ear_thresh)
-            # cv2.putText(frame, f"Adding to perclos: {adding_to_perclos}", (10, 260),
+                # compute the PERCLOS score and state of tiredness
+                tX = time.perf_counter()
+                # tired, perclos_score = Scorer.get_PERCLOS(t_now, fps, ear)
+
+                # _, perclos_rolling_score_v2 = Scorer.get_PERCLOS_rolling_v2(t_now, fps, ear, save_to_influx_every_x_seconds)
+                _, perclos_rolling_score_v3 = Scorer.get_PERCLOS_rolling_v3(t_now, fps, ear)
+                if (print_timings):
+                    print(f"Time to get PERCLOS: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
+                # tX = time.perf_counter()
+                # perclos_plotter.update_ear_scores(perclos_rolling_score_v3)  # Update the plot data
+                # perclos_plotter.overlay_graph_on_frame(frame)  # Overlay the graph on the frame
+                # if (print_timings) print(f"Time to update and overlay graph: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
+                # compute the Gaze Score
+                tX = time.perf_counter()
+                gaze = Eye_det.get_Gaze_Score(
+                    frame=gray, landmarks=landmarks, frame_size=frame_size)
+                if (print_timings):
+                    print(f"Time to get Gaze Score: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
+
+                if ear is not None:
+                    blink_detector.update_ear(ear)
+                    ear_values.append(ear)
+                    ear_left_values.append(ear_left)
+                    ear_right_values.append(ear_right)
+                if gaze is not None:
+                    gaze_values.append(gaze)
+
+                # if perclos_score is not None:
+                #     perclos_values.append(perclos_score)
+
+                # compute the head pose
+                # tX = time.perf_counter()
+                # frame_det, roll, pitch, yaw = Head_pose.get_pose(
+                #     frame=frame, landmarks=landmarks, frame_size=frame_size)
+                # if (print_timings):
+                #     print(f"Time to get head pose: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
+                # evaluate the scores for EAR, GAZE and HEAD POSE
+                # tX = time.perf_counter()
+                # asleep, looking_away, distracted = Scorer.eval_scores(t_now=t_now,
+                #                                                       ear_score=ear,
+                #                                                       gaze_score=gaze,
+                #                                                       head_roll=roll,
+                #                                                       head_pitch=pitch,
+                #                                                       head_yaw=yaw)
+                # if (print_timings) print(f"Time to evaluate scores: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
+                # tired_values.append(tired)
+                # distracted_values.append(distracted)
+                # looking_away_values.append(looking_away)
+
+
+                # if the head pose estimation is successful, show the results
+                # if frame_det is not None:
+                #     frame = frame_det
+
+
+                # adding_to_perclos = (ear is not None) and (ear <= Scorer.ear_thresh)
+                # cv2.putText(frame, f"Adding to perclos: {adding_to_perclos}", (10, 260),
+                #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+
+                # show the real-time EAR score
+                if ear is not None:
+                    cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50),
+                                cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
+                    draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right)
+
+                # show the real-time Gaze Score
+                # if gaze is not None:
+                #     cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80),
+                #                 cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+                # show the real-time PERCLOS score
+                # cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110),
+                #             cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                #
+                if perclos_rolling_score_v3 is not None:
+                    cv2.putText(frame, "PERCLOS ROLLING (V3):" + str(round(perclos_rolling_score_v3, 3)), (10, 140),
+                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+                if perclos_rolling_score_v2 is not None:
+                    cv2.putText(frame, "PERCLOS ROLLING (V2):" + str(round(perclos_rolling_score_v2, 3)), (10, 170),
+                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+                blink_count_per_min, blink_durations = blink_detector.get_blink_data()
+
+                if blink_count_per_min is not None:
+                    cv2.putText(frame, "BLINK COUNT:" + str(round(blink_count_per_min, 3)), (10, 200),
+                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+                if blink_durations is not None:
+                    cv2.putText(frame, "BLINK DURATION:" + str(round(blink_durations, 3)), (10, 230),
+                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+
+
+
+                # if roll is not None:
+                #     cv2.putText(frame, "roll:"+str(roll.round(1)[0]), (450, 40),
+                #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+                # if pitch is not None:
+                #     cv2.putText(frame, "pitch:"+str(pitch.round(1)[0]), (450, 70),
+                #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+                # if yaw is not None:
+                #     cv2.putText(frame, "yaw:"+str(yaw.round(1)[0]), (450, 100),
+                #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
+
+
+                # if the driver is tired, show and alert on screen
+                # if tired:
+                #     cv2.putText(frame, "TIRED!", (10, 280),
+                #                 cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+                #
+                # # if the state of attention of the driver is not normal, show an alert on screen
+                # if asleep:
+                #     cv2.putText(frame, "ASLEEP!", (10, 300),
+                #                 cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+                # if looking_away:
+                #     cv2.putText(frame, "LOOKING AWAY!", (10, 320),
+                #                 cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+                # if distracted:
+                #     cv2.putText(frame, "DISTRACTED!", (10, 340),
+                #                 cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+
+                # cv2.putText(frame, str(time.perf_counter() - t_last_save), (10, 360),
+                #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+
+            else:
+                present_values.append(0)
+
+            # cv2.putText(frame, f"Avg ear: {average_ear}", (10, 360),
+            #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # cv2.putText(frame, f"Avg gaze: {average_gaze}", (10, 380),
+            #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # cv2.putText(frame, f"Worst perclos: {worst_perclos}", (10, 400),
+            #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # cv2.putText(frame, f"Pct tired: {pct_tired}", (10, 420),
+            #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # cv2.putText(frame, f"Pct distracted: {pct_distracted}", (10, 440),
+            #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # cv2.putText(frame, f"Pct looking away: {pct_looking_away}", (10, 460),
+            #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+            # cv2.putText(frame, f"Pct present: {pct_present}", (10, 480),
             #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
 
-            # show the real-time EAR score
-            if ear is not None:
-                cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50),
-                            cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
-                draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right)
+            if (time.perf_counter() - t_last_image_save) > (60 * 20):
+                t_last_image_save = time.perf_counter()
+                cv2.imwrite(f"output_images/{t_last_save}.jpg", frame)
+                print("Image saved successfully.")
 
-            # show the real-time Gaze Score
-            # if gaze is not None:
-            #     cv2.putText(frame, "Gaze Score:" + str(round(gaze, 3)), (10, 80),
-            #                 cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+            if (time.perf_counter() - t_last_save) > save_to_influx_every_x_seconds:
+                t_last_save = time.perf_counter()
 
-            # show the real-time PERCLOS score
-            # cv2.putText(frame, "PERCLOS:" + str(round(perclos_score, 3)), (10, 110),
-            #             cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
-            #
-            if perclos_rolling_score_v3 is not None:
-                cv2.putText(frame, "PERCLOS ROLLING (V3):" + str(round(perclos_rolling_score_v3, 3)), (10, 140),
-                            cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                blink_count_per_min, blink_durations = blink_detector.get_blink_data()
+                print(f"Blink Count: {blink_count_per_min}, Blink Durations: {blink_durations}")
+                # Save blink_count and blink_durations to InfluxDB or any storage
 
-            if perclos_rolling_score_v2 is not None:
-                cv2.putText(frame, "PERCLOS ROLLING (V2):" + str(round(perclos_rolling_score_v2, 3)), (10, 170),
-                            cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                blink_durations = int(blink_durations * 1000)  # Convert to milliseconds
 
-            blink_count_per_min, blink_durations = blink_detector.get_blink_data()
+                average_ear = sum(ear_values) / len(ear_values) if ear_values else None
+                average_ear_left = sum(ear_left_values) / len(ear_left_values) if ear_left_values else None
+                average_ear_right = sum(ear_right_values) / len(ear_right_values) if ear_right_values else None
+                average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else None
 
-            if blink_count_per_min is not None:
-                cv2.putText(frame, "BLINK COUNT:" + str(round(blink_count_per_min, 3)), (10, 200),
-                            cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                # Just get a friendly number, and presumably less precision is cheaper to store
+                average_ear = int(average_ear * 100) if (average_ear  is not None and not math.isnan(average_ear) and not math.isinf(average_ear)) else None
+                average_ear_left = int(average_ear_left * 100) if (average_ear_left  is not None and not math.isnan(average_ear_left) and not math.isinf(average_ear_left)) else None
+                average_ear_right = int(average_ear_right * 100) if (average_ear_right is not None and not math.isnan(average_ear_right) and not math.isinf(average_ear_right)) else None
+                average_gaze = int(average_gaze * 1000) if (average_gaze is not None and not math.isnan(average_gaze) and not math.isinf(average_gaze)) else None
 
-            if blink_durations is not None:
-                cv2.putText(frame, "BLINK DURATION:" + str(round(blink_durations, 3)), (10, 230),
-                            cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                # worst_perclos = max(perclos_values) if perclos_values else None
 
+                # pct_tired = tired_values.count(True) / len(tired_values) if tired_values else None
+                # pct_distracted = distracted_values.count(True) / len(distracted_values) if distracted_values else None
+                # pct_looking_away = looking_away_values.count(True) / len(looking_away_values) if looking_away_values else None
 
+                pct_present = sum(present_values) / len(present_values) if present_values else 0
 
-            # if roll is not None:
-            #     cv2.putText(frame, "roll:"+str(roll.round(1)[0]), (450, 40),
-            #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            # if pitch is not None:
-            #     cv2.putText(frame, "pitch:"+str(pitch.round(1)[0]), (450, 70),
-            #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            # if yaw is not None:
-            #     cv2.putText(frame, "yaw:"+str(yaw.round(1)[0]), (450, 100),
-            #                 cv2.FONT_HERSHEY_PLAIN, 1.5, (255, 0, 255), 1, cv2.LINE_AA)
-            
+                ear_values = []
+                ear_left_values = []
+                ear_right_values = []
 
-            # if the driver is tired, show and alert on screen
-            # if tired:
-            #     cv2.putText(frame, "TIRED!", (10, 280),
-            #                 cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-            #
-            # # if the state of attention of the driver is not normal, show an alert on screen
-            # if asleep:
-            #     cv2.putText(frame, "ASLEEP!", (10, 300),
-            #                 cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-            # if looking_away:
-            #     cv2.putText(frame, "LOOKING AWAY!", (10, 320),
-            #                 cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-            # if distracted:
-            #     cv2.putText(frame, "DISTRACTED!", (10, 340),
-            #                 cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-
-            # cv2.putText(frame, str(time.perf_counter() - t_last_save), (10, 360),
-            #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-
-        else:
-            present_values.append(0)
-
-        # cv2.putText(frame, f"Avg ear: {average_ear}", (10, 360),
-        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        # cv2.putText(frame, f"Avg gaze: {average_gaze}", (10, 380),
-        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        # cv2.putText(frame, f"Worst perclos: {worst_perclos}", (10, 400),
-        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        # cv2.putText(frame, f"Pct tired: {pct_tired}", (10, 420),
-        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        # cv2.putText(frame, f"Pct distracted: {pct_distracted}", (10, 440),
-        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        # cv2.putText(frame, f"Pct looking away: {pct_looking_away}", (10, 460),
-        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-        # cv2.putText(frame, f"Pct present: {pct_present}", (10, 480),
-        #             cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
-
-        if (time.perf_counter() - t_last_image_save) > (60 * 20):
-            t_last_image_save = time.perf_counter()
-            cv2.imwrite(f"output_images/{t_last_save}.jpg", frame)
-            print("Image saved successfully.")
-
-        if (time.perf_counter() - t_last_save) > save_to_influx_every_x_seconds:
-            t_last_save = time.perf_counter()
-
-            blink_count_per_min, blink_durations = blink_detector.get_blink_data()
-            print(f"Blink Count: {blink_count_per_min}, Blink Durations: {blink_durations}")
-            # Save blink_count and blink_durations to InfluxDB or any storage
-
-            blink_durations = int(blink_durations * 1000)  # Convert to milliseconds
-
-            average_ear = sum(ear_values) / len(ear_values) if ear_values else None
-            average_ear_left = sum(ear_left_values) / len(ear_left_values) if ear_left_values else None
-            average_ear_right = sum(ear_right_values) / len(ear_right_values) if ear_right_values else None
-            average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else None
-
-            # Just get a friendly number, and presumably less precision is cheaper to store
-            average_ear = int(average_ear * 100) if (average_ear  is not None and not math.isnan(average_ear) and not math.isinf(average_ear)) else None
-            average_ear_left = int(average_ear_left * 100) if (average_ear_left  is not None and not math.isnan(average_ear_left) and not math.isinf(average_ear_left)) else None
-            average_ear_right = int(average_ear_right * 100) if (average_ear_right is not None and not math.isnan(average_ear_right) and not math.isinf(average_ear_right)) else None
-            average_gaze = int(average_gaze * 1000) if (average_gaze is not None and not math.isnan(average_gaze) and not math.isinf(average_gaze)) else None
-
-            # worst_perclos = max(perclos_values) if perclos_values else None
-
-            # pct_tired = tired_values.count(True) / len(tired_values) if tired_values else None
-            # pct_distracted = distracted_values.count(True) / len(distracted_values) if distracted_values else None
-            # pct_looking_away = looking_away_values.count(True) / len(looking_away_values) if looking_away_values else None
-
-            pct_present = sum(present_values) / len(present_values) if present_values else 0
-
-            ear_values = []
-            ear_left_values = []
-            ear_right_values = []
-
-            gaze_values = []
-            # perclos_values = []
-            # tired_values = []
-            # distracted_values = []
-            # looking_away_values = []
-            present_values = []
+                gaze_values = []
+                # perclos_values = []
+                # tired_values = []
+                # distracted_values = []
+                # looking_away_values = []
+                present_values = []
 
 
-            # Write data point to the "XL" bucket
-            try:
-                # Names do go on the wire but take minimal space in db
-                value = f"fatigue,host={hostname} present={pct_present}"
+                # Write data point to the "XL" bucket
+                try:
+                    # Names do go on the wire but take minimal space in db
+                    value = f"fatigue,host={hostname} present={pct_present}"
 
-                # All the perclos values are already % closed over some time frame, so there seems no better to averaging
-                # them further
+                    # All the perclos values are already % closed over some time frame, so there seems no better to averaging
+                    # them further
 
-                if (pct_present > 0):
-                    if (perclos_rolling_score_v2 != None):
-                        value += f",perclosV2={perclos_rolling_score_v2}"
-                    if (perclos_rolling_score_v3 != None):
-                        value += f",perclosV3={perclos_rolling_score_v3}"
-                    if (average_ear != None):
-                        value += f",ear={average_ear}"
-                        value += f",earLeft={average_ear_left}"
-                        value += f",earRight={average_ear_right}"
-                    if (average_gaze != None):
-                        value += f",gaze={average_gaze}"
+                    if (pct_present > 0):
+                        if (perclos_rolling_score_v2 != None):
+                            value += f",perclosV2={perclos_rolling_score_v2}"
+                        if (perclos_rolling_score_v3 != None):
+                            value += f",perclosV3={perclos_rolling_score_v3}"
+                        if (average_ear != None):
+                            value += f",ear={average_ear}"
+                            value += f",earLeft={average_ear_left}"
+                            value += f",earRight={average_ear_right}"
+                        if (average_gaze != None):
+                            value += f",gaze={average_gaze}"
 
 
-                # Don't record blinks if I'm not at the computer
-                if (pct_present > 0.8):
-                    if (blink_count_per_min != None):
-                        value += f",blinks={blink_count_per_min}"
-                    # Already a rolling average
-                    if (blink_durations != None):
-                        value += f",blinkDurations={blink_durations}"
-                    value += f",fps={round(fps)}"
-                # if (worst_perclos != None):
-                #     value += f",perclos={worst_perclos}"
-                # if (pct_tired != None):
-                #     value += f",tired={pct_tired}"
-                # if (pct_distracted != None):
-                #     value += f",distracted={pct_distracted}"
-                # if (pct_looking_away != None):
-                #     value += f",lookingAway={pct_looking_away}"
+                    # Don't record blinks if I'm not at the computer
+                    if (pct_present > 0.8):
+                        if (blink_count_per_min != None):
+                            value += f",blinks={blink_count_per_min}"
+                        # Already a rolling average
+                        if (blink_durations != None):
+                            value += f",blinkDurations={blink_durations}"
+                        value += f",fps={round(fps)}"
+                    # if (worst_perclos != None):
+                    #     value += f",perclos={worst_perclos}"
+                    # if (pct_tired != None):
+                    #     value += f",tired={pct_tired}"
+                    # if (pct_distracted != None):
+                    #     value += f",distracted={pct_distracted}"
+                    # if (pct_looking_away != None):
+                    #     value += f",lookingAway={pct_looking_away}"
 
-                value += f" {int(time.time())}"
-                print(f"Writing data to InfluxDB: {value}")
-                client.write([value],write_precision='s')
-            except Exception as e:
-                # Improved error message
-                error_type = type(e).__name__
-                print(f"Failed to write data to InfluxDB due to {error_type}: {e}")
-                print("Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
+                    value += f" {int(time.time())}"
+                    print(f"Writing data to InfluxDB: {value}")
+                    client.write([value],write_precision='s')
+                except Exception as e:
+                    # Improved error message
+                    error_type = type(e).__name__
+                    print(f"Failed to write data to InfluxDB due to {error_type}: {e}")
+                    print("Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
 
 
 
 
-        # stop the tick counter for computing the processing time for each frame
-        e2 = cv2.getTickCount()
-        # processign time in milliseconds
-        proc_time_frame_ms = ((e2 - e1) / cv2.getTickFrequency()) * 1000
-        # print fps and processing time per frame on screen
-        if args.show_fps:
-            cv2.putText(frame, "FPS:" + str(round(fps)), (10, 400), cv2.FONT_HERSHEY_PLAIN, 2,
-                        (255, 0, 255), 1)
-        if args.show_proc_time:
-            cv2.putText(frame, "PROC. TIME FRAME:" + str(round(proc_time_frame_ms, 0)) + 'ms', (10, 430), cv2.FONT_HERSHEY_PLAIN, 2,
-                        (255, 0, 255), 1)
+            # stop the tick counter for computing the processing time for each frame
+            e2 = cv2.getTickCount()
+            # processign time in milliseconds
+            proc_time_frame_ms = ((e2 - e1) / cv2.getTickFrequency()) * 1000
+            # print fps and processing time per frame on screen
+            if args.show_fps:
+                cv2.putText(frame, "FPS:" + str(round(fps)), (10, 400), cv2.FONT_HERSHEY_PLAIN, 2,
+                            (255, 0, 255), 1)
+            if args.show_proc_time:
+                cv2.putText(frame, "PROC. TIME FRAME:" + str(round(proc_time_frame_ms, 0)) + 'ms', (10, 430), cv2.FONT_HERSHEY_PLAIN, 2,
+                            (255, 0, 255), 1)
 
-        # show the frame on screen
-        tX = time.perf_counter()
-        cv2.imshow("Press 'q' to terminate", frame)
-        if (print_timings):
-            print(f"Time to draw frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+            # show the frame on screen
+            tX = time.perf_counter()
+            cv2.imshow("Press 'q' to terminate", frame)
+            if (print_timings):
+                print(f"Time to draw frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
-        # if the key "q" is pressed on the keyboard, the program is terminated
-        tX = time.perf_counter()
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-        if (print_timings):
-            print(f"Time to wait key: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+            # if the key "q" is pressed on the keyboard, the program is terminated
+            tX = time.perf_counter()
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+            if (print_timings):
+                print(f"Time to wait key: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
-        if (print_timings):
-            print(f"Time for total frame: {(time.perf_counter() - t_now) * 1000} {(time.perf_counter() - tX) * 1000}")
+            if (print_timings):
+                print(f"Time for total frame: {(time.perf_counter() - t_now) * 1000} {(time.perf_counter() - tX) * 1000}")
 
-        i += 1
-    
-    cap.release()
-    cv2.destroyAllWindows()
+            i += 1
+    except  e:
+        print("process_frames thread ended: " + e)
 
-    return
+# Create and start the threads
+thread_capture = threading.Thread(target=capture_frames, daemon=True)
+thread_save = threading.Thread(target=save_frames, daemon=True)
+thread_process = threading.Thread(target=process_frames, daemon=True)
 
+thread_capture.start()
+thread_save.start()
+thread_process.start()
 
-if __name__ == "__main__":
-    main()
+# Keep the main thread alive
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("Stopping...")
