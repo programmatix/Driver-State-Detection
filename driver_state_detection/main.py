@@ -268,17 +268,23 @@ def main():
         if fps == 0:
             fps = 10
 
+        tX = time.perf_counter()
         ret, frame = cap.read()  # read a frame from the webcam
+        if (print_timings):
+            print(f"Time to read frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
         if not ret:  # if a frame can't be read, exit the program
             print("Can't receive frame from camera/stream end")
             break
 
          # if the frame comes from webcam, flip it so it looks like a mirror.
+        tX = time.perf_counter()
         if args.camera == 0:
             frame = cv2.flip(frame, 2)
 
         frame = zoom_in(frame, 2)
+        if (print_timings):
+            print(f"Time to process frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
         # start the tick counter for computing the processing time for each frame
         e1 = cv2.getTickCount()
@@ -287,7 +293,7 @@ def main():
         tX = time.perf_counter()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if (print_timings):
-            print(f"Time to convert to grayscale: {time.perf_counter() - tX}")
+            print(f"Time to convert to grayscale: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
         # get the frame size
         frame_size = frame.shape[1], frame.shape[0]
@@ -297,13 +303,13 @@ def main():
         gray = np.expand_dims(cv2.bilateralFilter(gray, 5, 10, 10), axis=2)
         gray = np.concatenate([gray, gray, gray], axis=2)
         if (print_timings):
-            print(f"Time to bilateral filter: {time.perf_counter() - tX}")
+            print(f"Time to bilateral filter: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
         # find the faces using the face mesh model
         tX = time.perf_counter()
         lms = detector.process(gray).multi_face_landmarks
         if (print_timings):
-            print(f"Time to find faces: {time.perf_counter() - tX}")
+            print(f"Time to find faces: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
         perclos_rolling_score_v2 = None
 
@@ -314,26 +320,26 @@ def main():
             tX = time.perf_counter()
             landmarks = _get_landmarks(lms)
             if (print_timings):
-                print(f"Time to get landmarks: {time.perf_counter() - tX}")
+                print(f"Time to get landmarks: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
             # shows the eye keypoints (can be commented)
             # tX = time.perf_counter()
-            Eye_det.show_eye_keypoints(
-                color_frame=frame, landmarks=landmarks, frame_size=frame_size)
-            # if (print_timings) print(f"Time to show eye keypoints: {time.perf_counter() - tX}")
+            # Eye_det.show_eye_keypoints(
+            #     color_frame=frame, landmarks=landmarks, frame_size=frame_size)
+            # if (print_timings) print(f"Time to show eye keypoints: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
             # compute the EAR score of the eyes
             tX = time.perf_counter()
             ear, ear_left, ear_right = Eye_det.get_EAR(frame=gray, landmarks=landmarks)
             if (print_timings):
-                print(f"Time to get EAR: {time.perf_counter() - tX}")
+                print(f"Time to get EAR: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
 
             # Assuming `frame` is your current video frame and `ear` is the current EAR score
             # tX = time.perf_counter()
             # ear_plotter.update_ear_scores(ear)  # Update the plot data
             # ear_plotter.overlay_graph_on_frame(frame)  # Overlay the graph on the frame
-            # if (print_timings) print(f"Time to update and overlay graph: {time.perf_counter() - tX}")
+            # if (print_timings) print(f"Time to update and overlay graph: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
 
             # Display the frame with the overlay
@@ -348,18 +354,19 @@ def main():
             # _, perclos_rolling_score_v2 = Scorer.get_PERCLOS_rolling_v2(t_now, fps, ear, save_to_influx_every_x_seconds)
             _, perclos_rolling_score_v3 = Scorer.get_PERCLOS_rolling_v3(t_now, fps, ear)
             if (print_timings):
-                print(f"Time to get PERCLOS: {time.perf_counter() - tX}")
+                print(f"Time to get PERCLOS: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
             # tX = time.perf_counter()
             # perclos_plotter.update_ear_scores(perclos_rolling_score_v3)  # Update the plot data
             # perclos_plotter.overlay_graph_on_frame(frame)  # Overlay the graph on the frame
-            # if (print_timings) print(f"Time to update and overlay graph: {time.perf_counter() - tX}")
+            # if (print_timings) print(f"Time to update and overlay graph: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
             # compute the Gaze Score
-            # tX = time.perf_counter()
+            tX = time.perf_counter()
             gaze = Eye_det.get_Gaze_Score(
                 frame=gray, landmarks=landmarks, frame_size=frame_size)
-            # if (print_timings) print(f"Time to get Gaze Score: {time.perf_counter() - tX}")
+            if (print_timings):
+                print(f"Time to get Gaze Score: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
 
             if ear is not None:
@@ -378,7 +385,7 @@ def main():
             # frame_det, roll, pitch, yaw = Head_pose.get_pose(
             #     frame=frame, landmarks=landmarks, frame_size=frame_size)
             # if (print_timings):
-            #     print(f"Time to get head pose: {time.perf_counter() - tX}")
+            #     print(f"Time to get head pose: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
             
              # evaluate the scores for EAR, GAZE and HEAD POSE
             # tX = time.perf_counter()
@@ -388,7 +395,7 @@ def main():
             #                                                       head_roll=roll,
             #                                                       head_pitch=pitch,
             #                                                       head_yaw=yaw)
-            # if (print_timings) print(f"Time to evaluate scores: {time.perf_counter() - tX}")
+            # if (print_timings) print(f"Time to evaluate scores: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
             # tired_values.append(tired)
             # distracted_values.append(distracted)
@@ -524,16 +531,18 @@ def main():
 
                 # All the perclos values are already % closed over some time frame, so there seems no better to averaging
                 # them further
-                if (perclos_rolling_score_v2 != None):
-                    value += f",perclosV2={perclos_rolling_score_v2}"
-                if (perclos_rolling_score_v3 != None):
-                    value += f",perclosV3={perclos_rolling_score_v3}"
-                if (average_ear != None):
-                    value += f",ear={average_ear}"
-                    value += f",earLeft={average_ear_left}"
-                    value += f",earRight={average_ear_right}"
-                if (average_gaze != None):
-                    value += f",gaze={average_gaze}"
+
+                if (pct_present > 0):
+                    if (perclos_rolling_score_v2 != None):
+                        value += f",perclosV2={perclos_rolling_score_v2}"
+                    if (perclos_rolling_score_v3 != None):
+                        value += f",perclosV3={perclos_rolling_score_v3}"
+                    if (average_ear != None):
+                        value += f",ear={average_ear}"
+                        value += f",earLeft={average_ear_left}"
+                        value += f",earRight={average_ear_right}"
+                    if (average_gaze != None):
+                        value += f",gaze={average_gaze}"
 
 
                 # Don't record blinks if I'm not at the computer
@@ -543,6 +552,7 @@ def main():
                     # Already a rolling average
                     if (blink_durations != None):
                         value += f",blinkDurations={blink_durations}"
+                    value += f",fps={round(fps)}"
                 # if (worst_perclos != None):
                 #     value += f",perclos={worst_perclos}"
                 # if (pct_tired != None):
@@ -577,12 +587,21 @@ def main():
                         (255, 0, 255), 1)
 
         # show the frame on screen
+        tX = time.perf_counter()
         cv2.imshow("Press 'q' to terminate", frame)
+        if (print_timings):
+            print(f"Time to draw frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
         # if the key "q" is pressed on the keyboard, the program is terminated
+        tX = time.perf_counter()
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        
+        if (print_timings):
+            print(f"Time to wait key: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
+        if (print_timings):
+            print(f"Time for total frame: {(time.perf_counter() - t_now) * 1000} {(time.perf_counter() - tX) * 1000}")
+
         i += 1
     
     cap.release()
