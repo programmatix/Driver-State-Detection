@@ -180,11 +180,12 @@ def capture_frames():
             print("Can't receive frame from camera/stream end")
             time.sleep(1)
             cap = cv2.VideoCapture(0)
-        if (print_timings):
-            #histogram.record_value((time.perf_counter() - tX) * 1000)
-            print(f"Time to read frame: {(time.perf_counter() - tX) * 1000}")
-        frame_queue1.put(frame)
-        frame_queue2.put(frame)
+        else:
+            if (print_timings):
+                #histogram.record_value((time.perf_counter() - tX) * 1000)
+                print(f"Time to read frame: {(time.perf_counter() - tX) * 1000}")
+            #frame_queue1.put(frame)
+            frame_queue2.put(frame)
 
         #Every second display histogram
 
@@ -201,6 +202,9 @@ def save_frames():
             frame_idx = 0  # Reset frame index for each new second
 
         timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S") + "-" + str(frame_idx)
+        if (frame_idx == 0):
+            print("New second " + timestamp)
+
         frame_idx += 1
         filename = f"output_images/{timestamp}.jpg"
         # cv2.imwrite(filename, frame)
@@ -312,8 +316,9 @@ def process_frames():
 
 
         # 0.20 too sensitive
+        # 0.10 not picking up
         # 0.05 not picking up
-        blink_detector = BlinkDetector(ear_threshold=0.1)  # Set your EAR threshold
+        blink_detector = BlinkDetector(ear_threshold=0.15)  # Set your EAR threshold
 
         # Example usage
         ear_plotter = RealTimeEARPlot()
@@ -377,10 +382,11 @@ def process_frames():
                     print(f"Time to get landmarks: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
                 # shows the eye keypoints (can be commented)
-                # tX = time.perf_counter()
-                # Eye_det.show_eye_keypoints(
-                #     color_frame=frame, landmarks=landmarks, frame_size=frame_size)
-                # if (print_timings) print(f"Time to show eye keypoints: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+                tX = time.perf_counter()
+                Eye_det.show_eye_keypoints(
+                    color_frame=frame, landmarks=landmarks, frame_size=frame_size)
+                if (print_timings):
+                    print(f"Time to show eye keypoints: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
                 # compute the EAR score of the eyes
                 tX = time.perf_counter()
@@ -655,6 +661,8 @@ def process_frames():
             if args.show_proc_time:
                 cv2.putText(frame, "PROC. TIME FRAME:" + str(round(proc_time_frame_ms, 0)) + 'ms', (10, 430), cv2.FONT_HERSHEY_PLAIN, 2,
                             (255, 0, 255), 1)
+
+            frame_queue1.put(frame)
 
             # show the frame on screen
             tX = time.perf_counter()
