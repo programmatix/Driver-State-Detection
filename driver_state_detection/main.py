@@ -1,32 +1,28 @@
+# Must run under an admin prompt with
 # start "" /high python main.py
+# ($Process = Start-Process "python" -ArgumentList "main.py" -PassThru).PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High
 
-import threading
-import os
-import psutil
-import cv2
-import threading
-import queue
-import time
-from datetime import datetime
 
-import time
 import argparse
-
 import cv2
-import numpy as np
-import mediapipe as mp
 import math
-from Utils import get_face_area
+import mediapipe as mp
+import numpy as np
+import os
+import queue
+import socket
+import threading
+import time
+from Attention_Scorer_Module import AttentionScorer as AttScorer
+from BlinkDetector import BlinkDetector
 from Eye_Dector_Module import EyeDetector as EyeDet
 from Pose_Estimation_Module import HeadPoseEstimator as HeadPoseEst
-from Attention_Scorer_Module import AttentionScorer as AttScorer
-from influxdb_client_3 import InfluxDBClient3
 from RealTimeEARPlot import RealTimeEARPlot
 from RealTimePERCLOSPlot import RealTimePERCLOSPlot
+from datetime import datetime
 from dotenv import load_dotenv
-import os
-import socket
-from BlinkDetector import BlinkDetector
+from influxdb_client_3 import InfluxDBClient3
+
 #from hdrhistogram import HdrHistogram
 
 hostname = socket.gethostname()
@@ -155,13 +151,6 @@ frame_queue2 = queue.Queue()
 
 print_timings = False
 
-import win32api,win32process,win32con
-
-# We need high priority otherwise FPS goes way down when we alt-tab away
-pid = win32api.GetCurrentProcessId()
-handle = win32api.OpenProcess(win32con.PROCESS_ALL_ACCESS, True, pid)
-win32process.SetPriorityClass(handle, win32process.HIGH_PRIORITY_CLASS)
-
 def capture_frames():
     # p = psutil.Process(os.getpid())
     # # Set the process priority to above normal, this can be adjusted to your needs
@@ -202,8 +191,8 @@ def save_frames():
             frame_idx = 0  # Reset frame index for each new second
 
         timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S") + "-" + str(frame_idx)
-        if (frame_idx == 0):
-            print("New second " + timestamp)
+        # if (frame_idx == 0):
+        #     print("New second " + timestamp)
 
         frame_idx += 1
         filename = f"output_images/{timestamp}.jpg"
