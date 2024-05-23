@@ -146,17 +146,25 @@ def draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right):
                 cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
 
 # Create a thread-safe queue
-frame_queue1 = queue.Queue()
-frame_queue2 = queue.Queue()
+frame_queue_for_saving = queue.Queue()
+frame_queue_for_processing = queue.Queue()
 
 print_timings = False
+capture_fps = 0
+save_fps = 0
+process_fps = 0
+capture_mode = False
 
 def capture_frames():
+    global capture_fps
     # p = psutil.Process(os.getpid())
     # # Set the process priority to above normal, this can be adjusted to your needs
     # p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
     # # Additionally, set the thread priority if needed
     # threading.current_thread().priority = threading.PRIORITY_HIGHEST
+
+    frame_idx = 0
+    prev_second = None
 
     cap = cv2.VideoCapture(0)
     # cap.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
@@ -165,6 +173,17 @@ def capture_frames():
     while True:
         tX = time.perf_counter()
         ret, frame = cap.read()
+
+        current_time = datetime.now()
+        current_second = current_time.strftime("%S")
+
+        if prev_second is None or prev_second != current_second:
+            prev_second = current_second
+            capture_fps = frame_idx
+            frame_idx = 0  # Reset frame index for each new second
+        else:
+            frame_idx += 1
+
         if not ret:
             print("Can't receive frame from camera/stream end")
             time.sleep(1)
@@ -173,35 +192,42 @@ def capture_frames():
             if (print_timings):
                 #histogram.record_value((time.perf_counter() - tX) * 1000)
                 print(f"Time to read frame: {(time.perf_counter() - tX) * 1000}")
-            #frame_queue1.put(frame)
-            frame_queue2.put(frame)
+            frame_queue_for_processing.put(frame)
 
         #Every second display histogram
 
 
 def save_frames():
+    global save_fps
     frame_idx = 0
     prev_second = None
     while True:
-        frame = frame_queue1.get()
+        frame = frame_queue_for_saving.get()
         current_time = datetime.now()
         current_second = current_time.strftime("%S")
 
         if prev_second is None or prev_second != current_second:
+            prev_second = current_second
+            save_fps = frame_idx
             frame_idx = 0  # Reset frame index for each new second
+        else:
+            frame_idx += 1
 
-        timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S") + "-" + str(frame_idx)
         # if (frame_idx == 0):
         #     print("New second " + timestamp)
 
-        frame_idx += 1
-        filename = f"output_images/{timestamp}.jpg"
-        # cv2.imwrite(filename, frame)
+        if capture_mode:
+            timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S") + "-" + str(frame_idx)
+            filename = f"output_images/{timestamp}.jpg"
+
+            # Don't compress - hard enough to debug
+            #cv2.imwrite(filename, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            cv2.imwrite(filename, frame)
         # print(f"Saved {filename}")
 
-        prev_second = current_second  # Update the previous second
-
 def process_frames():
+    global process_fps
+    global capture_mode
     try:
         parser = argparse.ArgumentParser(description='Driver State Detection')
 
@@ -304,24 +330,37 @@ def process_frames():
         pct_present = 0
 
 
-        # 0.20 too sensitive
-        # 0.10 not picking up
-        # 0.05 not picking up
-        blink_detector = BlinkDetector(ear_threshold=0.15)  # Set your EAR threshold
+        # When average EAR was being used:
+        # 0.20 avg too sensitive
+        # 0.10 avg not picking up
+        # 0.05 avg not picking up
+        blink_detector = BlinkDetector(ear_threshold=0.08)  # Set your EAR threshold
 
         # Example usage
         ear_plotter = RealTimeEARPlot()
         perclos_plotter = RealTimePERCLOSPlot()
 
+        frame_idx = 0
+        prev_second = None
         while True:
             t_now = time.perf_counter()
             period_start_time = time.perf_counter()
+            current_time = datetime.now()
+            current_second = current_time.strftime("%S")
+            text_list = []
+
+            if prev_second is None or prev_second != current_second:
+                prev_second = current_second
+                process_fps = frame_idx
+                frame_idx = 0  # Reset frame index for each new second
+            else:
+                frame_idx += 1
 
             fps = i / (t_now - t_last_save)
             if fps == 0:
                 fps = 10
 
-            frame = frame_queue2.get()
+            frame = frame_queue_for_processing.get()
 
             #print("Got frame for processing")
 
@@ -419,7 +458,7 @@ def process_frames():
 
 
                 if ear is not None:
-                    blink_detector.update_ear(ear)
+                    blink_detector.update_ear(ear_left)
                     ear_values.append(ear)
                     ear_left_values.append(ear_left)
                     ear_right_values.append(ear_right)
@@ -462,8 +501,11 @@ def process_frames():
 
                 # show the real-time EAR score
                 if ear is not None:
-                    cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50),
-                                cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
+                    text_list.append("EAR:" + str(round(ear, 3)))
+                    text_list.append(f"EAR LEFT: {round(ear_left, 3)}")
+                    text_list.append(f"EAR RIGHT: {round(ear_right, 3)}")
+                    # cv2.putText(frame, "EAR:" + str(round(ear, 3)), (10, 50),
+                    #             cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 255), 1, cv2.LINE_AA)
                     draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right)
 
                 # show the real-time Gaze Score
@@ -476,23 +518,43 @@ def process_frames():
                 #             cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
                 #
                 if perclos_rolling_score_v3 is not None:
-                    cv2.putText(frame, "PERCLOS ROLLING (V3):" + str(round(perclos_rolling_score_v3, 3)), (10, 140),
-                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                    text_list.append("PERCLOS ROLLING (V3):" + str(round(perclos_rolling_score_v3, 3)))
+
+                    # cv2.putText(frame, "PERCLOS ROLLING (V3):" + str(round(perclos_rolling_score_v3, 3)), (10, 140),
+                    #                 cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
 
                 if perclos_rolling_score_v2 is not None:
-                    cv2.putText(frame, "PERCLOS ROLLING (V2):" + str(round(perclos_rolling_score_v2, 3)), (10, 170),
-                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                    # cv2.putText(frame, "PERCLOS ROLLING (V2):" + str(round(perclos_rolling_score_v2, 3)), (10, 170),
+                    #             cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                    text_list.append("PERCLOS ROLLING (V2):" + str(round(perclos_rolling_score_v2, 3)))
 
-                blink_count_per_min, blink_durations = blink_detector.get_blink_data()
+                blink_count_per_min, blink_durations = blink_detector.get_blink_data_all()
+                blink_count_recent, blink_durations_recent = blink_detector.get_blink_data_recent(5)
+
 
                 if blink_count_per_min is not None:
-                    cv2.putText(frame, "BLINK COUNT:" + str(round(blink_count_per_min, 3)), (10, 200),
-                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                    # cv2.putText(frame, "BLINK COUNT:" + str(round(blink_count_per_min, 3)), (10, 200),
+                    #             cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                    text_list.append("BLINK COUNT (60s):" + str(round(blink_count_per_min, 3)))
 
                 if blink_durations is not None:
-                    cv2.putText(frame, "BLINK DURATION:" + str(round(blink_durations, 3)), (10, 230),
-                                cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                    # cv2.putText(frame, "BLINK DURATION:" + str(round(blink_durations, 3)), (10, 230),
+                    #             cv2.FONT_HERSHEY_PLAIN, 2, (0, 0, 255), 1, cv2.LINE_AA)
+                    text_list.append("BLINK DURATION (60s):" + str(round(blink_durations, 3)))
 
+                text_list.append("BLINK COUNT (5s):" + str(round(blink_count_recent, 3)))
+                text_list.append("BLINK Duration (5s):" + str(round(blink_durations_recent, 3)))
+
+                #text_list.append(f"Process frame time: ${proc_time_frame_ms}")
+                text_list.append(f"FPS Capture: {capture_fps}")
+                text_list.append(f"FPS Process: {process_fps}")
+                text_list.append(f"FPS Store  : {save_fps}")
+                text_list.append(f"Capture mode: {capture_mode}")
+
+                position = 1
+                for text in text_list:
+                    cv2.putText(frame, text, (10, position * 23), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
+                    position += 1
 
 
                 # if roll is not None:
@@ -551,7 +613,8 @@ def process_frames():
             if (time.perf_counter() - t_last_save) > save_to_influx_every_x_seconds:
                 t_last_save = time.perf_counter()
 
-                blink_count_per_min, blink_durations = blink_detector.get_blink_data()
+                blink_count_per_min, blink_durations = blink_detector.get_blink_data_all()
+                blink_count_recent, blink_durations_recent = blink_detector.get_blink_data_recent(5)
                 print(f"Blink Count: {blink_count_per_min}, Blink Durations: {blink_durations}")
                 # Save blink_count and blink_durations to InfluxDB or any storage
 
@@ -617,7 +680,10 @@ def process_frames():
                         # Already a rolling average
                         if (blink_durations != None):
                             value += f",blinkDurations={blink_durations}"
-                        value += f",fps={round(fps)}"
+                        value += f",blinksV2={blink_count_recent}"
+                        value += f",blinkDurationsV2={blink_durations_recent}"
+                        value += f",fpsCapture={round(capture_fps)}"
+                        value += f",fpsProcess={round(process_fps)}"
                     # if (worst_perclos != None):
                     #     value += f",perclos={worst_perclos}"
                     # if (pct_tired != None):
@@ -644,24 +710,29 @@ def process_frames():
             # processign time in milliseconds
             proc_time_frame_ms = ((e2 - e1) / cv2.getTickFrequency()) * 1000
             # print fps and processing time per frame on screen
-            if args.show_fps:
-                cv2.putText(frame, "FPS:" + str(round(fps)), (10, 400), cv2.FONT_HERSHEY_PLAIN, 2,
-                            (255, 0, 255), 1)
-            if args.show_proc_time:
-                cv2.putText(frame, "PROC. TIME FRAME:" + str(round(proc_time_frame_ms, 0)) + 'ms', (10, 430), cv2.FONT_HERSHEY_PLAIN, 2,
-                            (255, 0, 255), 1)
+            # if args.show_fps:
+            #     cv2.putText(frame, "FPS:" + str(round(fps)), (10, 400), cv2.FONT_HERSHEY_PLAIN, 2,
+            #                 (255, 0, 255), 1)
+            # if args.show_proc_time:
+            #     cv2.putText(frame, "PROC. TIME FRAME:" + str(round(proc_time_frame_ms, 0)) + 'ms', (10, 430), cv2.FONT_HERSHEY_PLAIN, 2,
+            #                 (255, 0, 255), 1)
 
-            frame_queue1.put(frame)
+            frame_queue_for_saving.put(frame)
 
             # show the frame on screen
             tX = time.perf_counter()
-            cv2.imshow("Press 'q' to terminate", frame)
+            cv2.imshow("Press 'q' to terminate, 'c' to start saving, 'd' to stop", frame)
             if (print_timings):
                 print(f"Time to draw frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
             # if the key "q" is pressed on the keyboard, the program is terminated
             tX = time.perf_counter()
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('c'):
+                capture_mode = True
+            elif key == ord('d'):
+                capture_mode = False
+            elif key == ord('q'):
                 break
             if (print_timings):
                 print(f"Time to wait key: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")

@@ -25,7 +25,7 @@ class BlinkDetector:
             print("Blink ended duration:", blink_end_time - self.blink_start_time, "seconds")
             self.blink_start_time = None
 
-    def get_blink_data(self):
+    def get_blink_data_all(self):
         # Filter blinks that occurred in the last 60 seconds
         current_time = time.perf_counter()
         recent_blinks = [blink for blink in self.blinks if current_time - blink[1] <= 60]
@@ -38,3 +38,13 @@ class BlinkDetector:
             return None, average_duration
         else:
             return blink_count, average_duration
+
+    def get_blink_data_recent(self, seconds):
+        current_time = time.perf_counter()
+        recent_blinks = [blink for blink in self.blinks if current_time - blink[1] <= seconds]
+        blink_count = len(recent_blinks)
+        if blink_count > 0:
+            average_duration = sum(end - start for start, end in recent_blinks) / blink_count
+        else:
+            average_duration = 0
+        return blink_count, average_duration
