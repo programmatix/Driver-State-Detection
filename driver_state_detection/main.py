@@ -27,9 +27,12 @@ from FrameProcessor import process_frames
 
 parser = argparse.ArgumentParser(description='Driver State Detection')
 parser.add_argument('--input', type=str, default="")
+parser.add_argument('-c', '--camera', type=int,
+                    default=0, metavar='', help='Camera number, default is 0 (webcam)')
+parser.add_argument('-f', '--flip', type=int)
 
 # parse the arguments and store them in the args variable dictionary
-args = parser.parse_args()
+tempArgs = parser.parse_args()
 
 done = False
 
@@ -87,7 +90,7 @@ def zoom_in(frame, zoom_factor=2):
     A zoom_factor of 2 means the image will be zoomed in by 100%, focusing on the center.
 
     Parameters:
-    - frame: The original webcam frame.
+    - frame: The original webcaframe.
     - zoom_factor: The factor by which to zoom in on the frame.
 
     Returns:
@@ -161,21 +164,13 @@ print_timings = False
 capture_fps = 0
 save_fps = 0
 process_fps = 0
-capture_mode = args.input != ""
+capture_mode = tempArgs.input != ""
+buffer_mode = False
+dump_buffered_frames = False
+flip_mode = tempArgs.flip
 
-def capture_frames():
-    global capture_fps
-    global done
-    # p = psutil.Process(os.getpid())
-    # # Set the process priority to above normal, this can be adjusted to your needs
-    # p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
-    # # Additionally, set the thread priority if needed
-    # threading.current_thread().priority = threading.PRIORITY_HIGHEST
-
-    frame_idx = 0
-    prev_second = None
-
-    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+def open_camera():
+    cap = cv2.VideoCapture(tempArgs.camera, cv2.CAP_DSHOW)
     # cap.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160) # 4k/high_res
@@ -197,6 +192,31 @@ def capture_frames():
     print(f"The default resolution of the webcam is {width}x{height}")
 
     cap.set(cv2.VIDEO_ACCELERATION_ANY, 1)
+    return cap
+
+def compress_frame(frame, quality=95):
+    # Encode the frame into a memory buffer
+    ret, jpeg_frame = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+
+    # Decode the memory buffer back into an image
+    # compressed_frame = cv2.imdecode(jpeg_frame, 1)
+
+    return jpeg_frame
+
+def capture_frames():
+    global capture_fps
+    global done
+    # p = psutil.Process(os.getpid())
+    # # Set the process priority to above normal, this can be adjusted to your needs
+    # p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+    # # Additionally, set the thread priority if needed
+    # threading.current_thread().priority = threading.PRIORITY_HIGHEST
+
+    frame_idx = 0
+    prev_second = None
+
+    cap = open_camera()
+
     #histogram = HdrHistogram()
     while done is False:
         tX = time.perf_counter()
@@ -215,7 +235,7 @@ def capture_frames():
         if not ret:
             print("Can't receive frame from camera/stream end")
             time.sleep(1)
-            cap = cv2.VideoCapture(0)
+            cap = open_camera()
         else:
             if (print_timings):
                 #histogram.record_value((time.perf_counter() - tX) * 1000)
@@ -223,16 +243,31 @@ def capture_frames():
             frame_queue_for_processing.put(frame)
 
         #Every second display histogram
+    print("Capture thread done")
+    cap.release()
+
+buffered_frames = []
 
 
 def save_frames():
     global save_fps
     global capture_mode
+    global buffer_mode
     global done
+    global dump_buffered_frames
+    global buffered_frames
+
     frame_idx = 0
     prev_second = None
+
     while done is False:
-        frames = frame_queue_for_saving.get()
+        try:
+            frames = frame_queue_for_saving.get(timeout=1)
+        except queue.Empty:
+            continue
+
+        #print(f"Got frames orig={int(frames[0].nbytes / 1024)}kb processed={int(frames[1].nbytes / 1024)}kb")
+
         current_time = datetime.now()
         current_second = current_time.strftime("%S")
 
@@ -242,6 +277,31 @@ def save_frames():
             frame_idx = 0  # Reset frame index for each new second
         else:
             frame_idx += 1
+
+        now = time.time()
+        # buffered_frames.append((frames[0], now, frame_idx, "orig"))
+
+        # We have to compressed the stored image, it's just way too much memory otherwise
+        if buffer_mode:
+            compressed = compress_frame(frames[1], 95)
+            buffered_frames.append((compressed, now, frame_idx, "proc", current_time))
+            five_minutes_ago = now - 10 * 60
+            buffered_frames = [(frame, timestamp, idx, desc, timestamp2) for frame, timestamp, idx, desc, timestamp2 in buffered_frames if timestamp >= five_minutes_ago]
+
+
+        if dump_buffered_frames:
+            dump_buffered_frames = False
+
+            # Save all frames in the buffer that are within the last 5 minutes
+            for bframe, timestamp, idx, desc, timestamp2 in buffered_frames:
+                fn = timestamp2.strftime("%Y-%m-%d_%H-%M-%S") + "-" + desc + "-" + str(idx)
+                filename1 = f"output_images/{fn}.jpg"
+
+                print(f"Writing {filename1}")
+                with open(filename1, "wb") as f:
+                    f.write(bframe.tobytes())
+
+            buffered_frames = []
 
         # if (frame_idx == 0):
         #     print("New second " + timestamp)
@@ -256,35 +316,34 @@ def save_frames():
             cv2.imwrite(filename1, frames[0])
             cv2.imwrite(filename2, frames[1])
 
+
 def process_frames():
     global process_fps
     global capture_mode
+    global flip_mode
     global done
+    global buffered_frames
+    global dump_buffered_frames
+    global buffer_mode
+    global print_timings
     try:
         parser = argparse.ArgumentParser(description='Driver State Detection')
 
         # selection the camera number, default is 0 (webcam)
         parser.add_argument('-c', '--camera', type=int,
                             default=0, metavar='', help='Camera number, default is 0 (webcam)')
+        parser.add_argument('-f', '--flip', type=int)
 
         # TODO: add option for choose if use camera matrix and dist coeffs
-
-        # visualisation parameters
-        parser.add_argument('--show_fps', type=bool, default=True,
-                            metavar='', help='Show the actual FPS of the capture stream, default is true')
-        parser.add_argument('--show_proc_time', type=bool, default=True,
-                            metavar='', help='Show the processing time for a single frame, default is true')
-        parser.add_argument('--show_eye_proc', type=bool, default=False,
-                            metavar='', help='Show the eyes processing, deafult is false')
-        parser.add_argument('--show_axis', type=bool, default=True,
-                            metavar='', help='Show the head pose axis, default is true')
-        parser.add_argument('--verbose', type=bool, default=False,
-                            metavar='', help='Prints additional info, default is false')
 
         # Attention Scorer parameters (EAR, Gaze Score, Pose)
         parser.add_argument('--smooth_factor', type=float, default=0.5,
                             metavar='', help='Sets the smooth factor for the head pose estimation keypoint smoothing, default is 0.5')
-        parser.add_argument('--ear_thresh', type=float, default=0.15,
+        # When average EAR was being used for blinks (pre Pixel):
+        # 0.20 avg too sensitive
+        # 0.10 avg not picking up
+        # 0.05 avg not picking up
+        parser.add_argument('--ear_thresh', type=float, default=0.08,
                             metavar='', help='Sets the EAR threshold for the Attention Scorer, default is 0.15')
         parser.add_argument('--ear_time_thresh', type=float, default=2,
                             metavar='', help='Sets the EAR time (seconds) threshold for the Attention Scorer, default is 2 seconds')
@@ -306,9 +365,6 @@ def process_frames():
         # parse the arguments and store them in the args variable dictionary
         args = parser.parse_args()
 
-        if args.verbose:
-            print(f"Arguments and Parameters used:\n{args}\n")
-
         if args.input:
             frame_queue_for_processing.put(cv2.imread(args.input))
 
@@ -329,9 +385,9 @@ def process_frames():
                                                    refine_landmarks=True)
 
         # instantiation of the eye detector and pose estimator objects
-        Eye_det = EyeDet(show_processing=args.show_eye_proc)
+        Eye_det = EyeDet(show_processing=False)
 
-        Head_pose = HeadPoseEst(show_axis=args.show_axis)
+        #Head_pose = HeadPoseEst(show_axis=args.show_axis)
 
         # instantiation of the attention scorer object, with the various thresholds
         # NOTE: set verbose to True for additional printed information about the scores
@@ -340,7 +396,7 @@ def process_frames():
                            roll_thresh=args.roll_thresh, pitch_thresh=args.pitch_thresh,
                            yaw_thresh=args.yaw_thresh, ear_time_thresh=args.ear_time_thresh,
                            gaze_thresh=args.gaze_thresh, pose_time_thresh=args.pose_time_thresh,
-                           verbose=args.verbose)
+                           verbose=False)
 
         i = 0
         time.sleep(0.01) # To prevent zero division error when calculating the FPS
@@ -354,27 +410,10 @@ def process_frames():
         ear_left_values = []
         ear_right_values = []
         gaze_values = []
-        perclos_values = []
-        tired_values = []
-        distracted_values = []
-        looking_away_values = []
         present_values = []
-        average_ear = 0
-        average_gaze = 0
-        worst_perclos = 0
-        pct_tired = 0
-        pct_distracted = 0
-        pct_looking_away = 0
-        pct_present = 0
 
+        blink_detector = BlinkDetector(ear_threshold=args.ear_thresh)  # Set your EAR threshold
 
-        # When average EAR was being used:
-        # 0.20 avg too sensitive
-        # 0.10 avg not picking up
-        # 0.05 avg not picking up
-        blink_detector = BlinkDetector(ear_threshold=0.08)  # Set your EAR threshold
-
-        # Example usage
         ear_plotter = RealTimeEARPlot()
         perclos_plotter = RealTimePERCLOSPlot()
 
@@ -398,9 +437,13 @@ def process_frames():
             if fps == 0:
                 fps = 10
 
-            frame = frame_queue_for_processing.get()
+            try:
+                frame = frame_queue_for_processing.get(timeout=1)
+            except queue.Empty:
+                continue
 
-            #print("Got frame for processing")
+
+            #print(f"Got frame for processing {frame.nbytes / 1024}kb")
 
             # if the frame comes from webcam, flip it so it looks like a mirror.
             tX = time.perf_counter()
@@ -408,59 +451,82 @@ def process_frames():
             #     frame = cv2.flip(frame, 2)
             #elif args.camera == 1:
 
-            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            frame = cv2.flip(frame, 1)
+            #print(f"Flip is {args.flip}")
+            # frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            if flip_mode == 1:
+                #print(f"Flipping")
+
+                # This is 100% one of the modes I want, in this order!
+                # The Pixel has its own algo for if/how it flips the output also.
+                frame = cv2.flip(frame, 2)
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            elif flip_mode == 2:
+                #print(f"Flipping")
+
+                # This is 100% one of the modes I want, in this order!
+                # The Pixel has its own algo for if/how it flips the output also.
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                frame = cv2.flip(frame, 1)
+            # frame = cv2.flip(frame, 2)
             # frame = zoom_in(frame, 2)
-            # if (print_timings):
-            #     print(f"Time to process frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+            if (print_timings):
+                print(f"Time to flip frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
             # start the tick counter for computing the processing time for each frame
-            e1 = cv2.getTickCount()
+            # e1 = cv2.getTickCount()
 
             # height, width = frame.shape[:2]  # Get the height and width of the image
             # tiny = cv2.resize(frame, (width//4, height//4))
 
-            processed = frame
+            processed = frame.copy()
+
+            # tX = time.perf_counter()
+            # processed = compress_frame(frame, 80)
+            # if (print_timings):
+            #     print(f"Time to compress frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+
             # Do a quick pass to find the face and zoom in on the left eye
-            lms = detector.process(processed).multi_face_landmarks
-
-            if processed is None or len(processed.shape) != 3:
-                print("bad processed 426")
-                exit(-1)
-
-            if lms:
-                landmarks = _get_landmarks(lms)
-
-                # Indices for the face landmarks in the 468-point model
-                FACE_INDICES = list(range(0, 468))
-
-                # Get the face landmarks
-                face_landmarks = landmarks[FACE_INDICES]
-
-                # Calculate the bounding box of the face
-                face_bbox = (min(face_landmarks[:, 0]),  # x_min
-                             min(face_landmarks[:, 1]),  # y_min
-                             max(face_landmarks[:, 0]),  # x_max
-                             max(face_landmarks[:, 1]))  # y_max
-
-                # Convert the bounding box coordinates to the frame scale
-                face_bbox = (int(face_bbox[0] * processed.shape[1]),  # x_min
-                             int(face_bbox[1] * processed.shape[0]),  # y_min
-                             int(face_bbox[2] * processed.shape[1]),  # x_max
-                             int(face_bbox[3] * processed.shape[0]))  # y_max
-
-                # Extract the ROI from the processed frame
-                face_roi = processed[face_bbox[1]:face_bbox[3], face_bbox[0]:face_bbox[2]]
-
-                # Resize the ROI to the original frame size
-                # face_zoomed_in = cv2.resize(face_roi, (tiny.shape[1], tiny.shape[0]), interpolation=cv2.INTER_LINEAR)
-
-                processed = face_roi
-                if processed is None or len(processed.shape) != 3:
-                    print("bad processed 459")
-                    exit(-1)
-
-                processed = frame
+            # Doesn't work currently
+            #
+            # lms = detector.process(processed).multi_face_landmarks
+            #
+            # if processed is None or len(processed.shape) != 3:
+            #     print("bad processed 426")
+            #     exit(-1)
+            #
+            # if lms:
+            #     landmarks = _get_landmarks(lms)
+            #
+            #     # Indices for the face landmarks in the 468-point model
+            #     FACE_INDICES = list(range(0, 468))
+            #
+            #     # Get the face landmarks
+            #     face_landmarks = landmarks[FACE_INDICES]
+            #
+            #     # Calculate the bounding box of the face
+            #     face_bbox = (min(face_landmarks[:, 0]),  # x_min
+            #                  min(face_landmarks[:, 1]),  # y_min
+            #                  max(face_landmarks[:, 0]),  # x_max
+            #                  max(face_landmarks[:, 1]))  # y_max
+            #
+            #     # Convert the bounding box coordinates to the frame scale
+            #     face_bbox = (int(face_bbox[0] * processed.shape[1]),  # x_min
+            #                  int(face_bbox[1] * processed.shape[0]),  # y_min
+            #                  int(face_bbox[2] * processed.shape[1]),  # x_max
+            #                  int(face_bbox[3] * processed.shape[0]))  # y_max
+            #
+            #     # Extract the ROI from the processed frame
+            #     face_roi = processed[face_bbox[1]:face_bbox[3], face_bbox[0]:face_bbox[2]]
+            #
+            #     # Resize the ROI to the original frame size
+            #     # face_zoomed_in = cv2.resize(face_roi, (tiny.shape[1], tiny.shape[0]), interpolation=cv2.INTER_LINEAR)
+            #
+            #     processed = face_roi
+            #     if processed is None or len(processed.shape) != 3:
+            #         print("bad processed 459")
+            #         exit(-1)
+            #
+            #     processed = frame
 
                 # Indices for the left eye landmarks in the 468-point model
                 # LEFT_EYE_INDICES = list(range(33, 47))
@@ -490,9 +556,9 @@ def process_frames():
 
 
 
-            if processed is None or len(processed.shape) != 3:
-                print("bad processed 485")
-                exit(-1)
+            # if processed is None or len(processed.shape) != 3:
+            #     print("bad processed 485")
+            #     exit(-1)
 
             # height, width = processed.shape[:2]  # Get the height and width of the image
             # processed = cv2.resize(processed, (width//2, height//2))  # Resize the image to half its original size
@@ -500,9 +566,14 @@ def process_frames():
             # transform the BGR frame in grayscale
             # tX = time.perf_counter()
             # processed = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            # print(f"gray={int(gray.nbytes / 1024)}kb")
             # if (print_timings):
             #     print(f"Time to convert to grayscale: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
+
+            # if processed is None or len(processed.shape) != 3:
+            #     print("bad processed 572")
+            #     exit(-1)
             # tX = time.perf_counter()
             # edges = cv2.Canny(processed, threshold1=50, threshold2=70)
             # if (print_timings):
@@ -517,14 +588,18 @@ def process_frames():
             # apply a bilateral filter to lower noise but keep frame details. create a 3D matrix from processed image to give it to the model
             # tX = time.perf_counter()
             # filtered = cv2.bilateralFilter(processed, 5, 10, 10)
-            # processed = np.expand_dims(cv2.bilateralFilter(processed, 5, 10, 10), axis=2)
+
+            # This takes the grayscale image and triples it so we end up with the same size image!
+            # But without that, face processing crashes
+            # processed = np.expand_dims(processed, axis=2)
             # processed = np.concatenate([processed, processed, processed], axis=2)
+
             # if (print_timings):
             #     print(f"Time to bilateral filter: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
-            if processed is None or len(processed.shape) != 3:
-                print("bad processed 525")
-                exit(-1)
+            # if processed is None or len(processed.shape) != 3:
+            #     print("bad processed 525")
+            #     exit(-1)
 
             # find the faces using the face mesh model
             tX = time.perf_counter()
@@ -574,7 +649,7 @@ def process_frames():
                 # tired, perclos_score = Scorer.get_PERCLOS(t_now, fps, ear)
 
                 # _, perclos_rolling_score_v2 = Scorer.get_PERCLOS_rolling_v2(t_now, fps, ear, save_to_influx_every_x_seconds)
-                _, perclos_rolling_score_v3 = Scorer.get_PERCLOS_rolling_v3(t_now, fps, ear)
+                _, perclos_rolling_score_v3 = Scorer.get_PERCLOS_rolling_v3(t_now, fps, ear_left)
                 if (print_timings):
                     print(f"Time to get PERCLOS: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
@@ -648,9 +723,19 @@ def process_frames():
                 text_list.append(f"FPS Capture: {capture_fps}")
                 text_list.append(f"FPS Process: {process_fps}")
                 text_list.append(f"FPS Store  : {save_fps}")
+                text_list.append(f"Flip mode: {flip_mode}")
                 text_list.append(f"Capture mode: {capture_mode}")
+                text_list.append(f"Dump mode: {dump_buffered_frames}")
+                text_list.append(f"Buffer mode: {buffer_mode}")
                 text_list.append(f"Save queue: {frame_queue_for_saving.qsize()}")
                 text_list.append(f"Process queue: {frame_queue_for_processing.qsize()}")
+
+
+                total_size = 0
+                for bframe, _, _, _, _ in buffered_frames:
+                    total_size += bframe.nbytes
+
+                text_list.append(f"Buffered to save: {len(buffered_frames)} frames {round(total_size / 1024 / 1024, 0)} MB")
 
                 position = 1
                 for text in text_list:
@@ -661,9 +746,9 @@ def process_frames():
             else:
                 present_values.append(0)
 
-            if processed is None or len(processed.shape) != 3:
-                print("bad processed 658")
-                exit(-1)
+            # if processed is None or len(processed.shape) != 3:
+            #     print("bad processed 658")
+            #     exit(-1)
 
             if saving_to_influx and (time.perf_counter() - t_last_save) > save_to_influx_every_x_seconds:
                 t_last_save = time.perf_counter()
@@ -739,6 +824,7 @@ def process_frames():
                         value += f",blinkDurationsV2={blink_durations_recent}"
                         value += f",fpsCapture={round(capture_fps)}"
                         value += f",fpsProcess={round(process_fps)}"
+                        value += f",queue={round(frame_queue_for_processing.qsize())}"
 
                     value += f" {int(time.time())}"
                     print(f"Writing data to InfluxDB: {value}")
@@ -750,30 +836,42 @@ def process_frames():
                     print("Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
 
 
+            #print(f"Got frame from webcam orig={int(frame.nbytes / 1024)}kb processed={int(processed.nbytes / 1024)}kb")
 
             frame_queue_for_saving.put([frame, processed])
 
-            if processed is None or len(processed.shape) != 3:
-                print("bad processed 756")
-                exit(-1)
+            # if processed is None or len(processed.shape) != 3:
+            #     print("bad processed 756")
+            #     exit(-1)
 
-            # show the frame on screen
-            tX = time.perf_counter()
-            cv2.imshow("Press 'q' to terminate, 'c' to start saving, 'd' to stop", processed)
-            if (print_timings):
-                print(f"Time to draw frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+            if (frame_idx % 10 == 0):
+                # show the frame on screen
+                tX = time.perf_counter()
+                cv2.imshow("Press 'q' to terminate, 'c' to start saving, 'd' to stop, 's' to save buffered frames, 'b' to buffer frames, 'p' to print timings, 'f' to change flip_mode", processed)
+                if (print_timings):
+                    print(f"Time to draw frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
-            # if the key "q" is pressed on the keyboard, the program is terminated
-            tX = time.perf_counter()
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('c'):
-                capture_mode = True
-            elif key == ord('d'):
-                capture_mode = False
-            elif key == ord('q'):
-                exit(0)
-            if (print_timings):
-                print(f"Time to wait key: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+                # if the key "q" is pressed on the keyboard, the program is terminated
+                tX = time.perf_counter()
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('c'):
+                    capture_mode = True
+                elif key == ord('d'):
+                    capture_mode = False
+                elif key == ord('f'):
+                    flip_mode += 1
+                    if flip_mode > 2:
+                        flip_mode = 0
+                elif key == ord('q'):
+                    exit(0)
+                elif key == ord('s'):
+                    dump_buffered_frames = True
+                elif key == ord('b'):
+                    buffer_mode = not buffer_mode
+                elif key == ord('p'):
+                    print_timings = not print_timings
+                if (print_timings):
+                    print(f"Time to wait key: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
             if (print_timings):
                 print(f"Time for total frame: {(time.perf_counter() - t_now) * 1000} {(time.perf_counter() - tX) * 1000}")
@@ -783,11 +881,11 @@ def process_frames():
         print("process_frames thread ended: " + e)
 
 # Create and start the threads
-thread_capture = threading.Thread(target=capture_frames, daemon=False)
-thread_save = threading.Thread(target=save_frames, daemon=False)
-thread_process = threading.Thread(target=process_frames, daemon=False)
+thread_capture = threading.Thread(target=capture_frames, daemon=True)
+thread_save = threading.Thread(target=save_frames, daemon=True)
+thread_process = threading.Thread(target=process_frames, daemon=True)
 
-if args.input == "":
+if tempArgs.input == "":
     thread_capture.start()
 
 thread_save.start()
@@ -801,5 +899,12 @@ except KeyboardInterrupt:
     print("Stopping...")
 print("done1")
 done = True
+thread_capture.join()
+print("thread_capture ended")
+thread_save.join()
+print("thread_save ended")
+thread_process.join()
+print("thread_process ended")
+
 os._exit(-1)
 print("done2")

@@ -12,7 +12,7 @@ class AttentionScorer:
 
         Parameters
         ----------
-        ear_thresh: float or int
+        ear_thresh: loat or int
             EAR score value threshold (if the EAR score is less than this value, eyes are considered closed!)
 
         gaze_thresh: float or int
