@@ -210,7 +210,7 @@ process_fps = 0
 capture_mode = args.input != ""
 buffer_mode = False
 dump_buffered_frames = False
-flip_mode = 0
+flip_mode = 3
 # Bit confused but I think OpenCV is working with screen space, e.g. left eye is on the left of the screen.
 # So this flips it so it's in physical space - left eye is physically on my left, e.g. right of the screen.
 flip_eye_mode = True
@@ -224,18 +224,17 @@ def open_camera():
     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160) # 4k/high_res
 
-    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
-    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
-    cap.set(cv2.CAP_PROP_FPS, 60) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FPS, 120) # 4k/high_res
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FPS, 60) # 4k/high_res
     # width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     # height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
 
 
-    # CV2 always defaults to 640x480
     width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -333,9 +332,14 @@ def save_frames():
         # buffered_frames.append((frames[0], now, frame_idx, "orig"))
 
         # We have to compressed the stored image, it's just way too much memory otherwise
+        compress_frames = False
+
         if buffer_mode:
-            compressed = compress_frame(frames[1], 95)
-            buffered_frames.append((compressed, now, frame_idx, "proc", current_time))
+            if compress_frames:
+                compressed_proc = compress_frame(frames[1], 95)
+                buffered_frames.append((compressed_proc, now, frame_idx, "proc", current_time))
+            else:
+                buffered_frames.append((frames[0], now, frame_idx, "orig", current_time))
             # five_minutes_ago = now - 10 * 60
             # buffered_frames = [(frame, timestamp, idx, desc, timestamp2) for frame, timestamp, idx, desc, timestamp2 in buffered_frames if timestamp >= five_minutes_ago]
 
@@ -343,14 +347,28 @@ def save_frames():
         if dump_buffered_frames:
             dump_buffered_frames = False
 
+            if compress_frames:
+                folderName = "output_images"
+            else:
+                folderName = f"training/{current_time.strftime('%Y-%m-%d_%H-%M-%S')}"
+            try:
+                os.mkdir(folderName)
+            except FileExistsError:
+                pass
+
             # Save all frames in the buffer that are within the last 5 minutes
             for bframe, timestamp, idx, desc, timestamp2 in buffered_frames:
+
                 fn = timestamp2.strftime("%Y-%m-%d_%H-%M-%S") + "-" + desc + "-" + str(idx)
-                filename1 = f"output_images/{fn}.jpg"
+
+                filename1 = f"{folderName}/{fn}.jpg"
 
                 print(f"Writing {filename1}")
-                with open(filename1, "wb") as f:
-                    f.write(bframe.tobytes())
+                if compress_frames:
+                    with open(filename1, "wb") as f:
+                        f.write(bframe.tobytes())
+                else:
+                    cv2.imwrite(filename1, bframe)
 
             buffered_frames = []
 
