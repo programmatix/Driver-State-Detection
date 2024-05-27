@@ -1,0 +1,6 @@
+numpy
+opencv-python
+mediapipe
+influxdb3-python
+python-dotenv
+tensorflow
