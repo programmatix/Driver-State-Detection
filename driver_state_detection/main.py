@@ -26,13 +26,46 @@ from FrameProcessor import process_frames
 #from hdrhistogram import HdrHistogram
 
 parser = argparse.ArgumentParser(description='Driver State Detection')
-parser.add_argument('--input', type=str, default="")
+
+# selection the camera number, default is 0 (webcam)
 parser.add_argument('-c', '--camera', type=int,
                     default=0, metavar='', help='Camera number, default is 0 (webcam)')
 parser.add_argument('-f', '--flip', type=int)
 
+# TODO: add option for choose if use camera matrix and dist coeffs
+
+# Attention Scorer parameters (EAR, Gaze Score, Pose)
+parser.add_argument('--smooth_factor', type=float, default=0.5,
+                    metavar='', help='Sets the smooth factor for the head pose estimation keypoint smoothing, default is 0.5')
+# When average EAR was being used for blinks (pre Pixel):
+# 0.20 avg too sensitive
+# 0.10 avg not picking up
+# 0.05 avg not picking up
+# Elgato https://dynalist.io/d/W6zPj7VmtrR-Jmv2n1WHT-Pg#z=BuGt5_-qrFDYLm3b4GCQ-8xT
+# 0.08 way too low, getting good closed-eye draws at 0.106
+# Trying 0.2
+parser.add_argument('--ear_thresh', type=float, default=0.23,
+                    metavar='', help='Sets the EAR threshold for the Attention Scorer, default is 0.15')
+parser.add_argument('--ear_time_thresh', type=float, default=2,
+                    metavar='', help='Sets the EAR time (seconds) threshold for the Attention Scorer, default is 2 seconds')
+parser.add_argument('--gaze_thresh', type=float, default=0.015,
+                    metavar='', help='Sets the Gaze Score threshold for the Attention Scorer, default is 0.2')
+parser.add_argument('--gaze_time_thresh', type=float, default=2, metavar='',
+                    help='Sets the Gaze Score time (seconds) threshold for the Attention Scorer, default is 2. seconds')
+parser.add_argument('--pitch_thresh', type=float, default=20,
+                    metavar='', help='Sets the PITCH threshold (degrees) for the Attention Scorer, default is 30 degrees')
+parser.add_argument('--yaw_thresh', type=float, default=20,
+                    metavar='', help='Sets the YAW threshold (degrees) for the Attention Scorer, default is 20 degrees')
+parser.add_argument('--roll_thresh', type=float, default=20,
+                    metavar='', help='Sets the ROLL threshold (degrees) for the Attention Scorer, default is 30 degrees')
+parser.add_argument('--pose_time_thresh', type=float, default=2.5,
+                    metavar='', help='Sets the Pose time threshold (seconds) for the Attention Scorer, default is 2.5 seconds')
+
+parser.add_argument('--input', type=str, default="")
+parser.add_argument('-w', '--write_to_influx', type=bool, default=False, metavar='', )
+
 # parse the arguments and store them in the args variable dictionary
-tempArgs = parser.parse_args()
+args = parser.parse_args()
 
 done = False
 
@@ -114,6 +147,7 @@ def zoom_in(frame, zoom_factor=2):
     return zoomed_in_frame
 
 def draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right):
+    global flip_eye_mode
     """
     Draws the EAR score between the eyes on the frame.
 
@@ -139,10 +173,10 @@ def draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right):
     frame_midpoint_y = int(midpoint_y * frame.shape[0])
 
     frame_left_x = int(left_eye_point[0] * frame.shape[1])
-    frame_left_y = int(left_eye_point[1] * frame.shape[0])
+    frame_left_y = int(left_eye_point[1] * frame.shape[0]) + 20
 
     frame_right_x = int(right_eye_point[0] * frame.shape[1])
-    frame_right_y = int(right_eye_point[1] * frame.shape[0])
+    frame_right_y = int(right_eye_point[1] * frame.shape[0]) + 20
 
     #print(f"Midpoint: ({frame_midpoint_x}, {frame_midpoint_y}) left: {left_eye_point} right: {right_eye_point} midpoint: {midpoint_x}, {midpoint_y}")
 
@@ -150,11 +184,20 @@ def draw_ear_between_eyes(frame, landmarks, ear, ear_left, ear_right):
     # cv2.putText(frame, f"EAR: {round(ear, 3)}", (frame_midpoint_x, frame_midpoint_y),
     #             cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
 
-    cv2.putText(frame, f"{round(ear_left, 3)}", (frame_left_x, frame_left_y),
-                cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
+    draw_on_screen_left_eye = 0
+    draw_on_screen_right_eye = 0
+    if flip_eye_mode:
+        draw_on_screen_left_eye = ear_right
+        draw_on_screen_right_eye = ear_left
+    else:
+        draw_on_screen_left_eye = ear_left
+        draw_on_screen_right_eye = ear_right
 
-    cv2.putText(frame, f"{round(ear_right, 3)}", (frame_right_x, frame_right_y),
-                cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
+    cv2.putText(frame, f"{round(draw_on_screen_left_eye, 3)}", (frame_left_x, frame_left_y),
+                cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1)
+
+    cv2.putText(frame, f"{round(draw_on_screen_right_eye, 3)}", (frame_right_x, frame_right_y),
+                cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1)
 
 # Create a thread-safe queue
 frame_queue_for_saving = queue.Queue()
@@ -164,23 +207,30 @@ print_timings = False
 capture_fps = 0
 save_fps = 0
 process_fps = 0
-capture_mode = tempArgs.input != ""
+capture_mode = args.input != ""
 buffer_mode = False
 dump_buffered_frames = False
-flip_mode = tempArgs.flip
+flip_mode = 0
+# Bit confused but I think OpenCV is working with screen space, e.g. left eye is on the left of the screen.
+# So this flips it so it's in physical space - left eye is physically on my left, e.g. right of the screen.
+flip_eye_mode = True
+saving_to_influx = args.write_to_influx
+print("Saving to InfluxDB: " + str(saving_to_influx) + " " + str(args.write_to_influx))
+
 
 def open_camera():
-    cap = cv2.VideoCapture(tempArgs.camera, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
     # cap.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160) # 4k/high_res
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
     cap.set(cv2.CAP_PROP_FPS, 60) # 4k/high_res
 
-    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
-    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FPS, 60) # 4k/high_res
     # width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     # height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
 
@@ -188,8 +238,9 @@ def open_camera():
     # CV2 always defaults to 640x480
     width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
-    print(f"The default resolution of the webcam is {width}x{height}")
+    print(f"The default resolution of the webcam is {width}x{height} {int(fps)}FPS")
 
     cap.set(cv2.VIDEO_ACCELERATION_ANY, 1)
     return cap
@@ -285,8 +336,8 @@ def save_frames():
         if buffer_mode:
             compressed = compress_frame(frames[1], 95)
             buffered_frames.append((compressed, now, frame_idx, "proc", current_time))
-            five_minutes_ago = now - 10 * 60
-            buffered_frames = [(frame, timestamp, idx, desc, timestamp2) for frame, timestamp, idx, desc, timestamp2 in buffered_frames if timestamp >= five_minutes_ago]
+            # five_minutes_ago = now - 10 * 60
+            # buffered_frames = [(frame, timestamp, idx, desc, timestamp2) for frame, timestamp, idx, desc, timestamp2 in buffered_frames if timestamp >= five_minutes_ago]
 
 
         if dump_buffered_frames:
@@ -321,49 +372,14 @@ def process_frames():
     global process_fps
     global capture_mode
     global flip_mode
+    global flip_eye_mode
     global done
     global buffered_frames
     global dump_buffered_frames
     global buffer_mode
     global print_timings
+    global saving_to_influx
     try:
-        parser = argparse.ArgumentParser(description='Driver State Detection')
-
-        # selection the camera number, default is 0 (webcam)
-        parser.add_argument('-c', '--camera', type=int,
-                            default=0, metavar='', help='Camera number, default is 0 (webcam)')
-        parser.add_argument('-f', '--flip', type=int)
-
-        # TODO: add option for choose if use camera matrix and dist coeffs
-
-        # Attention Scorer parameters (EAR, Gaze Score, Pose)
-        parser.add_argument('--smooth_factor', type=float, default=0.5,
-                            metavar='', help='Sets the smooth factor for the head pose estimation keypoint smoothing, default is 0.5')
-        # When average EAR was being used for blinks (pre Pixel):
-        # 0.20 avg too sensitive
-        # 0.10 avg not picking up
-        # 0.05 avg not picking up
-        parser.add_argument('--ear_thresh', type=float, default=0.08,
-                            metavar='', help='Sets the EAR threshold for the Attention Scorer, default is 0.15')
-        parser.add_argument('--ear_time_thresh', type=float, default=2,
-                            metavar='', help='Sets the EAR time (seconds) threshold for the Attention Scorer, default is 2 seconds')
-        parser.add_argument('--gaze_thresh', type=float, default=0.015,
-                            metavar='', help='Sets the Gaze Score threshold for the Attention Scorer, default is 0.2')
-        parser.add_argument('--gaze_time_thresh', type=float, default=2, metavar='',
-                            help='Sets the Gaze Score time (seconds) threshold for the Attention Scorer, default is 2. seconds')
-        parser.add_argument('--pitch_thresh', type=float, default=20,
-                            metavar='', help='Sets the PITCH threshold (degrees) for the Attention Scorer, default is 30 degrees')
-        parser.add_argument('--yaw_thresh', type=float, default=20,
-                            metavar='', help='Sets the YAW threshold (degrees) for the Attention Scorer, default is 20 degrees')
-        parser.add_argument('--roll_thresh', type=float, default=20,
-                            metavar='', help='Sets the ROLL threshold (degrees) for the Attention Scorer, default is 30 degrees')
-        parser.add_argument('--pose_time_thresh', type=float, default=2.5,
-                            metavar='', help='Sets the Pose time threshold (seconds) for the Attention Scorer, default is 2.5 seconds')
-
-        parser.add_argument('--input', type=str, default="")
-
-        # parse the arguments and store them in the args variable dictionary
-        args = parser.parse_args()
 
         if args.input:
             frame_queue_for_processing.put(cv2.imread(args.input))
@@ -382,6 +398,7 @@ def process_frames():
         detector = mp.solutions.face_mesh.FaceMesh(static_image_mode=False,
                                                    min_detection_confidence=0.5,
                                                    min_tracking_confidence=0.5,
+                                                   # https://github.com/google-ai-edge/mediapipe/blob/master/docs/solutions/face_mesh.md#attention-mesh-model
                                                    refine_landmarks=True)
 
         # instantiation of the eye detector and pose estimator objects
@@ -404,7 +421,7 @@ def process_frames():
         t_last_image_save = t_last_save
 
         save_to_influx_every_x_seconds = 5
-        saving_to_influx = True
+        saving_to_influx = False
 
         ear_values = []
         ear_left_values = []
@@ -466,6 +483,8 @@ def process_frames():
                 # This is 100% one of the modes I want, in this order!
                 # The Pixel has its own algo for if/how it flips the output also.
                 frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                frame = cv2.flip(frame, 1)
+            elif flip_mode == 3:
                 frame = cv2.flip(frame, 1)
             # frame = cv2.flip(frame, 2)
             # frame = zoom_in(frame, 2)
@@ -627,7 +646,13 @@ def process_frames():
 
                 # compute the EAR score of the eyes
                 tX = time.perf_counter()
+
                 ear, ear_left, ear_right = Eye_det.get_EAR(frame=processed, landmarks=landmarks)
+                # Intentionally flipped here, into my physical left eye (not the eye on screen left)
+                if flip_eye_mode:
+                    temp = ear_right
+                    ear_right = ear_left
+                    ear_left = temp
                 if (print_timings):
                     print(f"Time to get EAR: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
@@ -697,8 +722,8 @@ def process_frames():
                 # show the real-time EAR score
                 if ear is not None:
                     text_list.append("EAR:" + str(round(ear, 3)))
-                    text_list.append(f"EAR LEFT: {round(ear_left, 3)}")
-                    text_list.append(f"EAR RIGHT: {round(ear_right, 3)}")
+                    text_list.append(f"EAR PHYSICAL LEFT: {round(ear_left, 3)}")
+                    text_list.append(f"EAR PHYSICAL RIGHT: {round(ear_right, 3)}")
                     draw_ear_between_eyes(processed, landmarks, ear, ear_left, ear_right)
 
                 if perclos_rolling_score_v3 is not None:
@@ -723,12 +748,14 @@ def process_frames():
                 text_list.append(f"FPS Capture: {capture_fps}")
                 text_list.append(f"FPS Process: {process_fps}")
                 text_list.append(f"FPS Store  : {save_fps}")
-                text_list.append(f"Flip mode: {flip_mode}")
+                text_list.append(f"Flip camera mode: {flip_mode}")
+                text_list.append(f"Flip eye mode: {flip_eye_mode}")
                 text_list.append(f"Capture mode: {capture_mode}")
                 text_list.append(f"Dump mode: {dump_buffered_frames}")
                 text_list.append(f"Buffer mode: {buffer_mode}")
                 text_list.append(f"Save queue: {frame_queue_for_saving.qsize()}")
                 text_list.append(f"Process queue: {frame_queue_for_processing.qsize()}")
+                text_list.append(f"Saving to influx: {saving_to_influx}")
 
 
                 total_size = 0
@@ -739,7 +766,7 @@ def process_frames():
 
                 position = 1
                 for text in text_list:
-                    cv2.putText(processed, text, (10, position * 23), cv2.FONT_HERSHEY_PLAIN, 1, (255, 255, 255), 1)
+                    cv2.putText(processed, text, (10, position * 23), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1)
                     position += 1
 
 
@@ -755,7 +782,7 @@ def process_frames():
 
                 blink_count_per_min, blink_durations = blink_detector.get_blink_data_all()
                 blink_count_recent, blink_durations_recent = blink_detector.get_blink_data_recent(5)
-                print(f"Blink Count: {blink_count_per_min}, Blink Durations: {blink_durations}")
+                #print(f"Blink Count: {blink_count_per_min}, Blink Durations: {blink_durations}")
                 # Save blink_count and blink_durations to InfluxDB or any storage
 
                 blink_durations = int(blink_durations * 1000)  # Convert to milliseconds
@@ -844,7 +871,7 @@ def process_frames():
             #     print("bad processed 756")
             #     exit(-1)
 
-            if (frame_idx % 10 == 0):
+            if (frame_idx % 60 == 0):
                 # show the frame on screen
                 tX = time.perf_counter()
                 cv2.imshow("Press 'q' to terminate, 'c' to start saving, 'd' to stop, 's' to save buffered frames, 'b' to buffer frames, 'p' to print timings, 'f' to change flip_mode", processed)
@@ -860,9 +887,10 @@ def process_frames():
                     capture_mode = False
                 elif key == ord('f'):
                     flip_mode += 1
-                    if flip_mode > 2:
+                    if flip_mode > 3:
                         flip_mode = 0
                 elif key == ord('q'):
+                    done = True
                     exit(0)
                 elif key == ord('s'):
                     dump_buffered_frames = True
@@ -870,6 +898,8 @@ def process_frames():
                     buffer_mode = not buffer_mode
                 elif key == ord('p'):
                     print_timings = not print_timings
+                elif key == ord('e'):
+                    flip_eye_mode = not flip_eye_mode
                 if (print_timings):
                     print(f"Time to wait key: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
@@ -885,7 +915,7 @@ thread_capture = threading.Thread(target=capture_frames, daemon=True)
 thread_save = threading.Thread(target=save_frames, daemon=True)
 thread_process = threading.Thread(target=process_frames, daemon=True)
 
-if tempArgs.input == "":
+if args.input == "":
     thread_capture.start()
 
 thread_save.start()

@@ -57,10 +57,10 @@ class EyeDetector:
             List of 478 mediapipe keypoints of the face
         """
 
-        cv2.circle(color_frame, (landmarks[LEFT_IRIS_NUM, :2] * frame_size).astype(np.uint32),
-                   3, (255, 255, 255), cv2.FILLED)
-        cv2.circle(color_frame, (landmarks[RIGHT_IRIS_NUM, :2] * frame_size).astype(np.uint32),
-                   3, (255, 255, 255), cv2.FILLED)
+        # cv2.circle(color_frame, (landmarks[LEFT_IRIS_NUM, :2] * frame_size).astype(np.uint32),
+        #            3, (255, 255, 255), cv2.FILLED)
+        # cv2.circle(color_frame, (landmarks[RIGHT_IRIS_NUM, :2] * frame_size).astype(np.uint32),
+        #            3, (255, 255, 255), cv2.FILLED)
 
         for n in EYES_LMS_NUMS:
             x = int(landmarks[n, 0] * frame_size[0])
