@@ -1,6 +1,8 @@
 import cv2
 import mediapipe as mp
+import numpy as np
 
+import TrainingConstants as tc
 
 def process_frames(images):
     detector = mp.solutions.face_mesh.FaceMesh(static_image_mode=False, min_detection_confidence=0.5, min_tracking_confidence=0.5, refine_landmarks=True)
@@ -106,7 +108,10 @@ def process_image(detector, filename, img, image_idx, debug=False):
         center_x, center_y = calculate_center_of_iris(landmarks, img, 468, debug)
         min_x, min_y, max_x, max_y = adjust_bounding_box(min_x, min_y, max_x, max_y, img, center_x, center_y, debug)
         eye_img = img[min_y:max_y, min_x:max_x]
-        eye_img = cv2.resize(eye_img, (99, 33))
+        eye_img = cv2.resize(eye_img, (tc.EYE_IMAGE_WIDTH, tc.EYE_IMAGE_HEIGHT))
         eye_img = cv2.cvtColor(eye_img, cv2.COLOR_BGR2GRAY)
-        eye_img = cv2.cvtColor(eye_img, cv2.COLOR_GRAY2BGR)
+
+        #eye_img = cv2.cvtColor(eye_img, cv2.COLOR_GRAY2BGR)
+
+
         return (filename, eye_img)
