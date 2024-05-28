@@ -11,22 +11,18 @@ from TrainingProcess import process_frames
 from tensorflow.keras.models import load_model
 from Thresholds import Thresholds
 
-parser = argparse.ArgumentParser(description='Process images in a folder')
-parser.add_argument('input', type=str, help='The path to the folder containing the images')
-parser.add_argument('model', type=str, help='The path to the saved model')
-args = parser.parse_args()
 
 
 import re
 
-def load_images(folder):
+def load_images(folder, max=None):
     images = []
     print(f'Loading from {folder}')
     count = 0
     # Primary sort on timestamp, secondary sort on frame number
     # Filename: 2024-05-27_09-10-39-orig-97.jpg
     for filename in sorted(glob(folder.replace("\\", "/") + '/*.jpg'), key=lambda f: (f.split('-orig-')[0], int(f.replace(".jpg", "").split('-')[-1]))):
-        if count > 100:
+        if max is not None and count > max:
             break
         print(f'Loading {filename}')
         img = cv2.imread(filename)
@@ -178,7 +174,11 @@ def handle_input(images, current_index, model):
 
 # Main function
 def main():
-    global args
+    parser = argparse.ArgumentParser(description='Process images in a folder')
+    parser.add_argument('input', type=str, help='The path to the folder containing the images')
+    parser.add_argument('model', type=str, help='The path to the saved model')
+    args = parser.parse_args()
+
     model = load_model(args.model)
     images = load_images(args.input)
     images = process_frames(images)

@@ -24,6 +24,7 @@ from RealTimeEARPlot import RealTimeEARPlot
 from RealTimePERCLOSPlot import RealTimePERCLOSPlot
 from datetime import datetime
 from dotenv import load_dotenv
+from EyeImage import clean_eye
 from influxdb_client_3 import InfluxDBClient3
 import tensorflow as tf
 from tensorflow.python.client import device_lib
@@ -234,6 +235,8 @@ flip_eye_mode = True
 saving_to_influx = args.write_to_influx
 print("Saving to InfluxDB: " + str(saving_to_influx) + " " + str(args.write_to_influx))
 
+mode = 0
+
 
 def open_camera():
     cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
@@ -414,6 +417,7 @@ def process_frames():
     global print_timings
     global saving_to_influx
     global model
+    global mode
     try:
 
         if args.input:
@@ -659,8 +663,47 @@ def process_frames():
             #     print("bad processed 525")
             #     exit(-1)
 
+            prediction = None
 
-            if True:
+            if mode == 0:
+                tX = time.perf_counter()
+                results = process_image(detector, "", processed, 0)
+                if (print_timings):
+                    print(f"Time to find eye: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+            
+                if results is not None:
+                    prediction, cleaned, steps = clean_eye(results[1])
+
+                    rolling_buffer.append(steps)
+
+                num_cols = 10
+                num_rows = 12
+                img_width = 99
+                img_height = 33
+
+                for i in range(min(7, len(rolling_buffer))):
+                    row = i
+                    rb = rolling_buffer[i]
+                    for col in range(0, len(rb)):
+                        x = col * img_width
+                        y = row * img_height
+                        if y + img_height <= processed.shape[0] and x + img_width <= processed.shape[1]:
+                            processed[y:y+img_height, x:x+img_width] = rb[col]
+                            #cv2.putText(processed, str(i), (x+5, y+15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1, cv2.LINE_AA)
+
+                # for i in range(min(num_rows * num_cols, len(rolling_buffer))):
+                #     row = i // num_cols
+                #     col = i % num_cols
+                #     x = col * img_width
+                #     y = row * img_height
+                #     if y + img_height <= processed.shape[0] and x + img_width <= processed.shape[1]:
+                #         processed[y:y+img_height, x:x+img_width] = rolling_buffer[i]
+                #         cv2.putText(processed, str(i), (x+5, y+15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1, cv2.LINE_AA)
+        
+                while (len(rolling_buffer) > 120):
+                    rolling_buffer.pop(0)
+
+            elif mode == 1:
                 tX = time.perf_counter()
                 _, just_eye_img = process_image(detector, "", processed, 0)
 
@@ -679,7 +722,6 @@ def process_frames():
 
                 processed[0:33,0:99] = just_eye_img
 
-                prediction = None
                 prediction_multi = None
 
                 # This isn't right anyway as we need to execute every frame against last few frames
@@ -885,7 +927,7 @@ def process_frames():
 
             position = 1
             for text in text_list:
-                cv2.putText(processed, text, (10, position * 23), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1)
+                cv2.putText(processed, text, (10, position * 23), cv2.FONT_HERSHEY_PLAIN, 1, (0, 255, 0), 1)
                 position += 1
 
             # if processed is None or len(processed.shape) != 3:

@@ -21,9 +21,9 @@ def process_frames(images):
 #left_eye_landmarks = [33, 7, 163, 144, 145, 153, 154, 155, 468, 246, 161, 160, 159, 158, 157, 173, 474]
 left_eye_landmarks = [
     # Lower contour.
-    33, 7, 163, 144, 145, 153, 154, 155, 133,
+    # 33, 7, 163, 144, 145, 153, 154, 155, 133,
     # upper contour (excluding corners).
-    246, 161, 160, 159, 158, 157, 173,
+    # 246, 161, 160, 159, 158, 157, 173,
     # Halo x2 lower contour.
     130, 25, 110, 24, 23, 22, 26, 112, 243,
     # Halo x2 upper contour (excluding corners).
@@ -102,16 +102,22 @@ def adjust_bounding_box(min_x, min_y, max_x, max_y, img, center_x, center_y, deb
     return min_x, min_y, max_x, max_y
 
 def process_image(detector, filename, img, image_idx, debug=False):
+    #raise Exception("Not implemented")
     landmarks = get_landmarks(detector, img, debug)
     if landmarks is not None:
         min_x, min_y, max_x, max_y = calculate_bounding_box(landmarks, img, left_eye_landmarks, debug)
         center_x, center_y = calculate_center_of_iris(landmarks, img, 468, debug)
         min_x, min_y, max_x, max_y = adjust_bounding_box(min_x, min_y, max_x, max_y, img, center_x, center_y, debug)
-        eye_img = img[min_y:max_y, min_x:max_x]
+
+        mask = np.zeros_like(img)
+        points = np.array([(landmarks[i].x * img.shape[1], landmarks[i].y * img.shape[0]) for i in left_eye_landmarks], np.int32)
+        ellipse = cv2.fitEllipse(points)
+        cv2.ellipse(mask, ellipse, (255, 255, 255), -1)
+        masked = cv2.bitwise_and(img, mask)
+
+        eye_img = masked[min_y:max_y, min_x:max_x]
         eye_img = cv2.resize(eye_img, (tc.EYE_IMAGE_WIDTH, tc.EYE_IMAGE_HEIGHT))
-        eye_img = cv2.cvtColor(eye_img, cv2.COLOR_BGR2GRAY)
 
-        #eye_img = cv2.cvtColor(eye_img, cv2.COLOR_GRAY2BGR)
-
+        # Not gray at this point because may have colour debug info
 
         return (filename, eye_img)
