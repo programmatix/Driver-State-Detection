@@ -47,7 +47,8 @@ parser = argparse.ArgumentParser(description='Driver State Detection')
 parser.add_argument('-c', '--camera', type=int,
                     default=0, metavar='', help='Camera number, default is 0 (webcam)')
 parser.add_argument('-f', '--flip', type=int)
-parser.add_argument('-m', '--model', type=str)
+parser.add_argument('--model', type=str)
+parser.add_argument('-m', '--mode', type=int, default=0)
 
 
 # Attention Scorer parameters (EAR, Gaze Score, Pose)
@@ -83,7 +84,7 @@ parser.add_argument('-w', '--write_to_influx', type=bool, default=False, metavar
 # parse the arguments and store them in the args variable dictionary
 args = parser.parse_args()
 
-model = load_model(args.model)
+#model = load_model(args.model)
 
 done = False
 
@@ -248,6 +249,12 @@ def open_camera():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
     cap.set(cv2.CAP_PROP_FPS, 120) # 4k/high_res
 
+    print(f"Camera supports CAP_PROP_ZOOM: {cap.get(cv2.CAP_PROP_ZOOM)}")
+    print(f"Camera supports CAP_PROP_FOURCC: {cap.get(cv2.CAP_PROP_FOURCC)}")
+
+    # Request compression
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourc(*"MJPG"))
+
     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FPS, 60) # 4k/high_res
@@ -291,6 +298,9 @@ def capture_frames():
     while done is False:
         tX = time.perf_counter()
         ret, frame = cap.read()
+        if (print_timings):
+            #histogram.record_value((time.perf_counter() - tX) * 1000)
+            print(f"Time to read frame: {(time.perf_counter() - tX) * 1000}")
 
         current_time = datetime.now()
         current_second = current_time.strftime("%S")
@@ -307,9 +317,6 @@ def capture_frames():
             time.sleep(1)
             cap = open_camera()
         else:
-            # if (print_timings):
-            #     #histogram.record_value((time.perf_counter() - tX) * 1000)
-            #     print(f"Time to read frame: {(time.perf_counter() - tX) * 1000}")
             frame_queue_for_processing.put(frame)
 
         #Every second display histogram
@@ -670,7 +677,7 @@ def process_frames():
                 results = process_image(detector, "", processed, 0)
                 if (print_timings):
                     print(f"Time to find eye: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-            
+
                 if results is not None:
                     prediction, cleaned, steps = clean_eye(results[1])
 
@@ -699,7 +706,7 @@ def process_frames():
                 #     if y + img_height <= processed.shape[0] and x + img_width <= processed.shape[1]:
                 #         processed[y:y+img_height, x:x+img_width] = rolling_buffer[i]
                 #         cv2.putText(processed, str(i), (x+5, y+15), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1, cv2.LINE_AA)
-        
+
                 while (len(rolling_buffer) > 120):
                     rolling_buffer.pop(0)
 
@@ -769,7 +776,7 @@ def process_frames():
                 tX = time.perf_counter()
                 # todo should be cv2.cvtColor(img, cv2.COLOR_BGR2RGB) as:
                 # Converts the image from BGR to RGB color space because the FaceMesh model expects images in RGB format.
-                lms = detector.process(processed).multi_face_landmarks
+                lms = detector.process(cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)).multi_face_landmarks
                 if (print_timings):
                     print(f"Time to find faces: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
@@ -780,12 +787,12 @@ def process_frames():
 
 
 
-                    prediction = None
-                    if len(rolling_buffer) == TrainingConstants.IMAGES_SHOWN_TO_MODEL:
-                        tX = time.perf_counter()
-                        prediction = predict2(rolling_buffer, model)
-                        if (print_timings):
-                            print(f"Time to predict: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+                    # prediction = None
+                    # if len(rolling_buffer) == TrainingConstants.IMAGES_SHOWN_TO_MODEL:
+                    #     tX = time.perf_counter()
+                    #     prediction = predict2(rolling_buffer, model)
+                    #     if (print_timings):
+                    #         print(f"Time to predict: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
                     # getting face landmarks and then take only the bounding box of the biggest face
                     tX = time.perf_counter()
@@ -1028,7 +1035,8 @@ def process_frames():
             #     print("bad processed 756")
             #     exit(-1)
 
-            if (frame_idx % 60 == 0):
+            # if (frame_idx % 60 == 0):
+            if True:
                 # show the frame on screen
                 tX = time.perf_counter()
                 cv2.imshow("Press 'q' to terminate, 'c' to toggle saving (for debug), 's' to save buffered frames, 'b' to buffer frames (for training), 'p' to print timings, 'f' to change flip_mode", processed)

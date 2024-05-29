@@ -38,7 +38,7 @@ def clean_eye(raw):
     mask_outside_eye = cv2.inRange(invert, 255, 255)
     mask_outside_eye = scale_down(mask_outside_eye, 0.9)
     steps.append(cv2.cvtColor(mask_outside_eye, cv2.COLOR_GRAY2BGR))
-    mask_light_areas = cv2.inRange(invert, 200, 255)
+    mask_light_areas = cv2.inRange(invert, 150, 255)
     steps.append(cv2.cvtColor(mask_light_areas, cv2.COLOR_GRAY2BGR))
     orig[mask_light_areas == 255] = (0, 0, 255)
     orig[mask_outside_eye == 255] = (255, 0, 0)
