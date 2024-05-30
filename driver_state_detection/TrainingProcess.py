@@ -41,6 +41,19 @@ left_eye_landmarks = [
     # 156, 70, 63, 105, 66, 107, 55, 193
 ]
 
+left_eye_iris_landmarks = [
+    # Center.
+    468,
+    # Iris right edge.
+    469,
+    # Iris top edge.
+    470,
+    # Iris left edge.
+    471,
+    # Iris bottom edge.
+    472
+]
+
 def get_landmarks(detector, img, debug):
     if debug:
         print(f"Processing image with detector")
@@ -109,15 +122,34 @@ def process_image(detector, filename, img, image_idx, debug=False):
         center_x, center_y = calculate_center_of_iris(landmarks, img, 468, debug)
         min_x, min_y, max_x, max_y = adjust_bounding_box(min_x, min_y, max_x, max_y, img, center_x, center_y, debug)
 
+        pixel = None
+
+        # Just normalize the eye portion
+        # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # pupil_x = int(landmarks[468].x * gray.shape[1])
+        # pupil_y = int(landmarks[468].y * gray.shape[0])
+        # pixel = gray[pupil_y, pupil_x]
+        # eye_img = gray[min_y:max_y, min_x:max_x]
+        # eye_img = cv2.normalize(eye_img, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+        # img[min_y:max_y, min_x:max_x] = cv2.cvtColor(eye_img, cv2.COLOR_GRAY2BGR)
+
+        for i in left_eye_iris_landmarks:
+            x = int(landmarks[i].x * img.shape[1])
+            y = int(landmarks[i].y * img.shape[0])
+            if i == 0:
+                pixel = img[y, x]
+            cv2.circle(img, (x, y), 1, (255, 0, 0), -1)
+
         mask = np.zeros_like(img)
         points = np.array([(landmarks[i].x * img.shape[1], landmarks[i].y * img.shape[0]) for i in left_eye_landmarks], np.int32)
         ellipse = cv2.fitEllipse(points)
         cv2.ellipse(mask, ellipse, (255, 255, 255), -1)
         masked = cv2.bitwise_and(img, mask)
 
+
         eye_img = masked[min_y:max_y, min_x:max_x]
         eye_img = cv2.resize(eye_img, (tc.EYE_IMAGE_WIDTH, tc.EYE_IMAGE_HEIGHT))
 
         # Not gray at this point because may have colour debug info
 
-        return (filename, eye_img)
+        return (filename, eye_img, pixel)

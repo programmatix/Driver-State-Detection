@@ -236,7 +236,7 @@ flip_eye_mode = True
 saving_to_influx = args.write_to_influx
 print("Saving to InfluxDB: " + str(saving_to_influx) + " " + str(args.write_to_influx))
 
-mode = 0
+mode = args.mode
 
 
 def open_camera():
@@ -245,18 +245,53 @@ def open_camera():
     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160) # 4k/high_res
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
     cap.set(cv2.CAP_PROP_FPS, 120) # 4k/high_res
 
     print(f"Camera supports CAP_PROP_ZOOM: {cap.get(cv2.CAP_PROP_ZOOM)}")
     print(f"Camera supports CAP_PROP_FOURCC: {cap.get(cv2.CAP_PROP_FOURCC)}")
 
     # Request compression
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourc(*"MJPG"))
+    #fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    # fourcc = cv2.VideoWriter_fourcc(*'X265')
+    # print(f"Setting cap CAP_PROP_FOURCC to X265: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    #
+    # fourcc = cv2.VideoWriter_fourcc(*'X264')
+    # print(f"Setting cap CAP_PROP_FOURCC to X264: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    #
+    # fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    # print(f"Setting cap CAP_PROP_FOURCC to XVID: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    #
+    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    print(f"Setting cap CAP_PROP_FOURCC to MJPG: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    #
+    # fourcc = cv2.VideoWriter_fourcc(*'MP4V')
+    # print(f"Setting cap CAP_PROP_FOURCC to MP4V: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    #
+    #
+    # fourcc = cv2.VideoWriter_fourcc(*'VP80')
+    # print(f"Setting cap CAP_PROP_FOURCC to VP80: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    #
+    # fourcc = cv2.VideoWriter_fourcc(*'VP90')
+    # print(f"Setting cap CAP_PROP_FOURCC to VP90: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    #
+    # fourcc = cv2.VideoWriter_fourcc(*'WMV1')
+    # print(f"Setting cap CAP_PROP_FOURCC to WMV1: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    #
+    # fourcc = cv2.VideoWriter_fourcc(*'WMV2')
+    # print(f"Setting cap CAP_PROP_FOURCC to WMV2: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    #
+    # fourcc = cv2.VideoWriter_fourcc(*'AVC1')
+    # print(f"Setting cap CAP_PROP_FOURCC to AVC1: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
 
-    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
-    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
+    #print(f"Setting cap CAP_MODE_GRAY: ", cap.set(cv2.CAP_PROP_MODE, cv2.CAP_MODE_GRAY))
+
+    print(f"Setting cap VIDEO_ACCELERATION_ANY: ", cap.set(cv2.VIDEO_ACCELERATION_ANY, 1))
+    #cap.set(cv2.VIDEO_ACCELERATION_ANY, 1)
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FPS, 60) # 4k/high_res
     # width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     # height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -268,7 +303,6 @@ def open_camera():
 
     print(f"The default resolution of the webcam is {width}x{height} {int(fps)}FPS")
 
-    cap.set(cv2.VIDEO_ACCELERATION_ANY, 1)
     return cap
 
 def compress_frame(frame, quality=95):
@@ -296,11 +330,11 @@ def capture_frames():
 
     #histogram = HdrHistogram()
     while done is False:
-        tX = time.perf_counter()
+        #tX = time.perf_counter()
         ret, frame = cap.read()
-        if (print_timings):
+        #if (print_timings):
             #histogram.record_value((time.perf_counter() - tX) * 1000)
-            print(f"Time to read frame: {(time.perf_counter() - tX) * 1000}")
+            #print(f"Time to read frame: {(time.perf_counter() - tX) * 1000} FPS: {capture_fps}")
 
         current_time = datetime.now()
         current_second = current_time.strftime("%S")
@@ -311,6 +345,9 @@ def capture_frames():
             frame_idx = 0  # Reset frame index for each new second
         else:
             frame_idx += 1
+
+        # cv2.imshow(f"window", frame)
+        # cv2.waitKey(1)
 
         if not ret:
             print("Can't receive frame from camera/stream end")
@@ -406,7 +443,7 @@ def save_frames():
 
             # Don't compress - hard enough to debug
             #cv2.imwrite(filename, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            # cv2.imwrite(filename1, frames[0])
+            cv2.imwrite(filename1, frames[0])
             cv2.imwrite(filename2, frames[1])
 
             print(f"Saved {filename1} and {filename2}")
