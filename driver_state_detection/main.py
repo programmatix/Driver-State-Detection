@@ -29,6 +29,8 @@ from influxdb_client_3 import InfluxDBClient3
 import tensorflow as tf
 from tensorflow.python.client import device_lib
 
+import approaches.MediapipeEARMultiFrame as MediapipeEARMultiFrame
+
 import TrainingConstants
 from ModelPredict import predict, predict_multi
 from TrainingProcess import process_image
@@ -245,9 +247,11 @@ def open_camera():
     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160) # 4k/high_res
 
-    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
-    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
-    cap.set(cv2.CAP_PROP_FPS, 120) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FPS, 60) # 4k/high_res
 
     print(f"Camera supports CAP_PROP_ZOOM: {cap.get(cv2.CAP_PROP_ZOOM)}")
     print(f"Camera supports CAP_PROP_FOURCC: {cap.get(cv2.CAP_PROP_FOURCC)}")
@@ -263,8 +267,8 @@ def open_camera():
     # fourcc = cv2.VideoWriter_fourcc(*'XVID')
     # print(f"Setting cap CAP_PROP_FOURCC to XVID: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
     #
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    print(f"Setting cap CAP_PROP_FOURCC to MJPG: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    # fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    # print(f"Setting cap CAP_PROP_FOURCC to MJPG: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
     #
     # fourcc = cv2.VideoWriter_fourcc(*'MP4V')
     # print(f"Setting cap CAP_PROP_FOURCC to MP4V: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
@@ -290,8 +294,6 @@ def open_camera():
     print(f"Setting cap VIDEO_ACCELERATION_ANY: ", cap.set(cv2.VIDEO_ACCELERATION_ANY, 1))
     #cap.set(cv2.VIDEO_ACCELERATION_ANY, 1)
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FPS, 60) # 4k/high_res
     # width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     # height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -330,11 +332,11 @@ def capture_frames():
 
     #histogram = HdrHistogram()
     while done is False:
-        #tX = time.perf_counter()
+        tX = time.perf_counter()
         ret, frame = cap.read()
         #if (print_timings):
             #histogram.record_value((time.perf_counter() - tX) * 1000)
-            #print(f"Time to read frame: {(time.perf_counter() - tX) * 1000} FPS: {capture_fps}")
+        print(f"Time to read frame: {(time.perf_counter() - tX) * 1000} FPS: {capture_fps}")
 
         current_time = datetime.now()
         current_second = current_time.strftime("%S")
@@ -353,8 +355,8 @@ def capture_frames():
             print("Can't receive frame from camera/stream end")
             time.sleep(1)
             cap = open_camera()
-        else:
-            frame_queue_for_processing.put(frame)
+        # else:
+        #     frame_queue_for_processing.put(frame)
 
         #Every second display histogram
     print("Capture thread done")
@@ -807,8 +809,7 @@ def process_frames():
 
                 text_list.append("filled rolling_buffers count: " + str(filled_rolling_buffers_count))
 
-            # old way
-            else:
+            elif mode == 2:
                 # find the faces using the face mesh model
                 tX = time.perf_counter()
                 # todo should be cv2.cvtColor(img, cv2.COLOR_BGR2RGB) as:
@@ -948,6 +949,30 @@ def process_frames():
 
                 else:
                     present_values.append(0)
+            elif mode == 3:
+                img: MediapipeEARMultiFrame.ProcessedImage = MediapipeEARMultiFrame.process_image(detector, processed)
+                if img is not None:
+                    rolling_buffer.append(img)
+
+                    while (len(rolling_buffer) > 120):
+                        rolling_buffer.pop(0)
+                    if len(rolling_buffer) >= 100:
+                        analysed: list[MediapipeEARMultiFrame.AnalysedImage] = MediapipeEARMultiFrame.analyse_images(rolling_buffer)
+                        latest = analysed[-1]
+
+                        text_list.append(f"Avg ear left: {latest.avg_ear_left}")
+                        text_list.append(f"Ear left: {latest.processed.ear_left}")
+                        text_list.append(f"Prev ear left: {latest.prev_ear_left}")
+                        text_list.append(f"Ear left diff: {latest.ear_left_diff}")
+                        text_list.append(f"Ear left diff ratio: {latest.ear_left_diff_ratio}")
+                        text_list.append(f"Blink: {latest.ear_left_diff_ratio > 0.5}")
+
+                        image_selector = lambda x: x.processed.eye_img_final
+                        debug_draw = MediapipeEARMultiFrame.cram_homogenous_images(analysed, 1000, image_selector, MediapipeEARMultiFrame.image_annotator)
+
+                        processed[0:debug_draw.shape[0], 0:debug_draw.shape[1]] = debug_draw
+
+
 
             text_list.append(f"FPS Capture: {capture_fps}")
             text_list.append(f"FPS Process: {process_fps}")
@@ -961,6 +986,7 @@ def process_frames():
             text_list.append(f"Process queue: {frame_queue_for_processing.qsize()}")
             text_list.append(f"Saving to influx: {saving_to_influx}")
             text_list.append(f"Prediction: {prediction}")
+            text_list.append(f"Mode: {mode}")
 
 
             total_size = 0
@@ -1112,14 +1138,14 @@ def process_frames():
 
 # Create and start the threads
 thread_capture = threading.Thread(target=capture_frames, daemon=True)
-thread_save = threading.Thread(target=save_frames, daemon=True)
-thread_process = threading.Thread(target=process_frames, daemon=True)
+# thread_save = threading.Thread(target=save_frames, daemon=True)
+# thread_process = threading.Thread(target=process_frames, daemon=True)
 
 if args.input == "":
     thread_capture.start()
 
-thread_save.start()
-thread_process.start()
+# thread_save.start()
+# thread_process.start()
 
 # Keep the main thread alive
 try:
@@ -1131,10 +1157,10 @@ print("done1")
 done = True
 thread_capture.join()
 print("thread_capture ended")
-thread_save.join()
-print("thread_save ended")
-thread_process.join()
-print("thread_process ended")
+# thread_save.join()
+# print("thread_save ended")
+# thread_process.join()
+# print("thread_process ended")
 
 os._exit(-1)
 print("done2")
