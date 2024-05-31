@@ -1,5 +1,7 @@
 # Expanding on the previous EAR single-frame approach, to consider EAR of previous frames too.
-
+import socket
+import time
+from datetime import datetime
 from glob import glob
 
 import cv2
@@ -176,7 +178,8 @@ def adjust_bounding_box(min_x, min_y, max_x, max_y, img, debug):
     return min_x, min_y, max_x, max_y
 
 
-def process_image(detector, original: any, debug=False) -> ProcessedImage:
+def process_image(detector, original: any, debug=False, profile=False) -> ProcessedImage:
+    tX = time.perf_counter()
     img_colour = original.copy()
     out = ProcessedImage()
     Eye_det = EyeDet2(show_processing=False)
@@ -202,6 +205,8 @@ def process_image(detector, original: any, debug=False) -> ProcessedImage:
 
         out.eye_img_final = eye_img
 
+        if (profile):
+            print(f"Time to process frame: {(time.perf_counter() - tX) * 1000}")
         return out
 
 
@@ -220,16 +225,24 @@ class AnalysedImage:
         self.ear_left_diff = self.processed.ear_left - self.prev_ear_left
         self.ear_left_diff_ratio = abs(self.ear_left_diff) / self.avg_ear_left
 
-def analyse_images(images: list[ProcessedImage]) -> list[AnalysedImage]:
+def analyse_images(images: list[ProcessedImage], N: int, profile=False) -> list[AnalysedImage]:
+    tX = time.perf_counter()
     avg_ear_left = sum([pi.ear_left for pi in images]) / len(images)
     out: list[AnalysedImage] = []
 
     for i in range(1, len(images)):
         pi = images[i]
-        prev = images[i - 1]
-        ai = AnalysedImage(pi, avg_ear_left, prev)
-        out.append(ai)
+        highest_diff: AnalysedImage = None
+        for n in range(max(0, i - N), min(len(images), i)):
+            prev = images[n]
+            ai = AnalysedImage(pi, avg_ear_left, prev)
+            if highest_diff is None or ai.ear_left_diff_ratio > highest_diff.ear_left_diff_ratio:
+                highest_diff = ai
+        if highest_diff is not None:
+            out.append(highest_diff)
 
+    if (profile):
+        print(f"Time to analyse images: {(time.perf_counter() - tX) * 1000}")
     return out
 
 def cram_homogenous_images(images: list[AnalysedImage], output_x, image_selector, image_annotator):
@@ -271,5 +284,36 @@ def image_annotator(ai: AnalysedImage, img, idx: int):
             colour = (0, 0, 255)
         else:
             colour = (0, 255, 0)
-    cv2.putText(img, f"{round(ai.processed.ear_left * 100)} {round(ai.ear_left_diff * 100)} {round(ai.ear_left_diff_ratio,1)} {round(ai.avg_ear_left * 100)}", (10, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2)
+    cv2.putText(img, f"{round(ai.processed.ear_left * 100)} {round(ai.ear_left_diff * 100)} {round(ai.ear_left_diff_ratio,1)}", (1, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1)
     return img
+
+class AnalysedImageAndTime:
+    ai: AnalysedImage
+
+    def __init__(self, ai: AnalysedImage, timestamp):
+        self.ai = ai
+        self.timestamp = timestamp
+
+class BlinkRecorder:
+    blinks_total = 0
+    _blinks_in_last_period: list[AnalysedImageAndTime] = []
+    currently_blinking = False
+
+    def __init__(self, period_seconds):
+        self.period_seconds = period_seconds
+        self.hostname = socket.gethostname()
+
+    def record(self, latest: AnalysedImage):
+        # Only record blink starts currently
+        current_time = datetime.now()
+        is_blinking = latest.ear_left_diff_ratio > 0.5 and latest.ear_left_diff < 0
+        self._blinks_in_last_period = [b for b in self._blinks_in_last_period if (current_time - b.timestamp).seconds <= self.period_seconds]
+        if is_blinking and not self.currently_blinking:
+            self.currently_blinking = True
+            self.blinks_total += 1
+            self._blinks_in_last_period.append(AnalysedImageAndTime(latest, current_time))
+            print(f"{current_time} Blink start, total blinks {self.blinks_total}, blinks in last period {len(self._blinks_in_last_period)}")
+        if self.currently_blinking and not is_blinking:
+            print(f"{current_time} Blink end, total blinks {self.blinks_total}, blinks in last period {len(self._blinks_in_last_period)}")
+            self.currently_blinking = False
+        return (self.currently_blinking, len(self._blinks_in_last_period), self.blinks_total)

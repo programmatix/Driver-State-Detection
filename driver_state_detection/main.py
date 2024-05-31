@@ -229,6 +229,8 @@ capture_fps = 0
 save_fps = 0
 process_fps = 0
 capture_mode = args.input != ""
+capture_single_frame_mode = False
+debug_mode = False
 buffer_mode = False
 dump_buffered_frames = False
 flip_mode = 3
@@ -332,11 +334,11 @@ def capture_frames():
 
     #histogram = HdrHistogram()
     while done is False:
-        tX = time.perf_counter()
+        #tX = time.perf_counter()
         ret, frame = cap.read()
         #if (print_timings):
             #histogram.record_value((time.perf_counter() - tX) * 1000)
-        print(f"Time to read frame: {(time.perf_counter() - tX) * 1000} FPS: {capture_fps}")
+        #print(f"Time to read frame: {(time.perf_counter() - tX) * 1000} FPS: {capture_fps}")
 
         current_time = datetime.now()
         current_second = current_time.strftime("%S")
@@ -355,8 +357,8 @@ def capture_frames():
             print("Can't receive frame from camera/stream end")
             time.sleep(1)
             cap = open_camera()
-        # else:
-        #     frame_queue_for_processing.put(frame)
+        else:
+            frame_queue_for_processing.put(frame)
 
         #Every second display histogram
     print("Capture thread done")
@@ -368,6 +370,7 @@ buffered_frames = []
 def save_frames():
     global save_fps
     global capture_mode
+    global capture_single_frame_mode
     global buffer_mode
     global done
     global dump_buffered_frames
@@ -438,7 +441,7 @@ def save_frames():
         # if (frame_idx == 0):
         #     print("New second " + timestamp)
 
-        if capture_mode:
+        if capture_mode or capture_single_frame_mode:
             timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S") + "-" + str(frame_idx)
             filename1 = f"output_images/{timestamp}-orig.jpg"
             filename2 = f"output_images/{timestamp}-processed.jpg"
@@ -450,10 +453,17 @@ def save_frames():
 
             print(f"Saved {filename1} and {filename2}")
 
+            if capture_single_frame_mode:
+                cv2.imshow("Single capture", frames[1])
+
+            capture_single_frame_mode = False
+
 
 def process_frames():
     global process_fps
     global capture_mode
+    global capture_single_frame_mode
+    global debug_mode
     global flip_mode
     global flip_eye_mode
     global done
@@ -506,7 +516,7 @@ def process_frames():
         t_last_image_save = t_last_save
 
         save_to_influx_every_x_seconds = 5
-        saving_to_influx = False
+        saving_to_influx = True
 
         ear_values = []
         ear_left_values = []
@@ -523,6 +533,8 @@ def process_frames():
         prev_second = None
         rolling_buffers = [[]]
         rolling_buffer = []
+        blink_recorder = MediapipeEARMultiFrame.BlinkRecorder(60)
+        currently_blinking = False
 
         while done is False:
             t_now = time.perf_counter()
@@ -950,27 +962,35 @@ def process_frames():
                 else:
                     present_values.append(0)
             elif mode == 3:
-                img: MediapipeEARMultiFrame.ProcessedImage = MediapipeEARMultiFrame.process_image(detector, processed)
+                img: MediapipeEARMultiFrame.ProcessedImage = MediapipeEARMultiFrame.process_image(detector, processed, profile=print_timings)
                 if img is not None:
                     rolling_buffer.append(img)
 
-                    while (len(rolling_buffer) > 120):
+                    images_to_keep = 150
+                    while (len(rolling_buffer) >= images_to_keep):
                         rolling_buffer.pop(0)
-                    if len(rolling_buffer) >= 100:
-                        analysed: list[MediapipeEARMultiFrame.AnalysedImage] = MediapipeEARMultiFrame.analyse_images(rolling_buffer)
+                    if len(rolling_buffer) > images_to_keep - 10:
+                        analysed: list[MediapipeEARMultiFrame.AnalysedImage] = MediapipeEARMultiFrame.analyse_images(rolling_buffer, 4, profile=print_timings)
                         latest = analysed[-1]
+                        currently_blinking, blinks_in_last_period, blinks_total = blink_recorder.record(latest)
 
                         text_list.append(f"Avg ear left: {latest.avg_ear_left}")
                         text_list.append(f"Ear left: {latest.processed.ear_left}")
                         text_list.append(f"Prev ear left: {latest.prev_ear_left}")
                         text_list.append(f"Ear left diff: {latest.ear_left_diff}")
                         text_list.append(f"Ear left diff ratio: {latest.ear_left_diff_ratio}")
-                        text_list.append(f"Blink: {latest.ear_left_diff_ratio > 0.5}")
+                        text_list.append(f"Currently blinking: {currently_blinking}")
+                        text_list.append(f"Blinks in last {blink_recorder.period_seconds}s: {blinks_in_last_period}")
+                        text_list.append(f"Blinks ever: {blinks_total}")
 
-                        image_selector = lambda x: x.processed.eye_img_final
-                        debug_draw = MediapipeEARMultiFrame.cram_homogenous_images(analysed, 1000, image_selector, MediapipeEARMultiFrame.image_annotator)
+                        if debug_mode:
+                            tX = time.perf_counter()
+                            image_selector = lambda x: x.processed.eye_img_final
+                            debug_draw = MediapipeEARMultiFrame.cram_homogenous_images(analysed, 1000, image_selector, MediapipeEARMultiFrame.image_annotator)
 
-                        processed[0:debug_draw.shape[0], 0:debug_draw.shape[1]] = debug_draw
+                            processed[0:debug_draw.shape[0], 0:debug_draw.shape[1]] = debug_draw
+                            if (print_timings):
+                                print(f"Time to draw debug: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
 
 
@@ -1007,87 +1027,106 @@ def process_frames():
             if saving_to_influx and (time.perf_counter() - t_last_save) > save_to_influx_every_x_seconds:
                 t_last_save = time.perf_counter()
 
-                blink_count_per_min, blink_durations = blink_detector.get_blink_data_all()
-                blink_count_recent, blink_durations_recent = blink_detector.get_blink_data_recent(5)
-                #print(f"Blink Count: {blink_count_per_min}, Blink Durations: {blink_durations}")
-                # Save blink_count and blink_durations to InfluxDB or any storage
+                if mode == 2:
+                    blink_count_per_min, blink_durations = blink_detector.get_blink_data_all()
+                    blink_count_recent, blink_durations_recent = blink_detector.get_blink_data_recent(5)
+                    #print(f"Blink Count: {blink_count_per_min}, Blink Durations: {blink_durations}")
+                    # Save blink_count and blink_durations to InfluxDB or any storage
 
-                blink_durations = int(blink_durations * 1000)  # Convert to milliseconds
+                    blink_durations = int(blink_durations * 1000)  # Convert to milliseconds
 
-                average_ear = sum(ear_values) / len(ear_values) if ear_values else None
-                average_ear_left = sum(ear_left_values) / len(ear_left_values) if ear_left_values else None
-                average_ear_right = sum(ear_right_values) / len(ear_right_values) if ear_right_values else None
-                average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else None
+                    average_ear = sum(ear_values) / len(ear_values) if ear_values else None
+                    average_ear_left = sum(ear_left_values) / len(ear_left_values) if ear_left_values else None
+                    average_ear_right = sum(ear_right_values) / len(ear_right_values) if ear_right_values else None
+                    average_gaze = sum(gaze_values) / len(gaze_values) if gaze_values else None
 
-                # Just get a friendly number, and presumably less precision is cheaper to store
-                average_ear = int(average_ear * 100) if (average_ear  is not None and not math.isnan(average_ear) and not math.isinf(average_ear)) else None
-                average_ear_left = int(average_ear_left * 100) if (average_ear_left  is not None and not math.isnan(average_ear_left) and not math.isinf(average_ear_left)) else None
-                average_ear_right = int(average_ear_right * 100) if (average_ear_right is not None and not math.isnan(average_ear_right) and not math.isinf(average_ear_right)) else None
-                average_gaze = int(average_gaze * 1000) if (average_gaze is not None and not math.isnan(average_gaze) and not math.isinf(average_gaze)) else None
+                    # Just get a friendly number, and presumably less precision is cheaper to store
+                    average_ear = int(average_ear * 100) if (average_ear  is not None and not math.isnan(average_ear) and not math.isinf(average_ear)) else None
+                    average_ear_left = int(average_ear_left * 100) if (average_ear_left  is not None and not math.isnan(average_ear_left) and not math.isinf(average_ear_left)) else None
+                    average_ear_right = int(average_ear_right * 100) if (average_ear_right is not None and not math.isnan(average_ear_right) and not math.isinf(average_ear_right)) else None
+                    average_gaze = int(average_gaze * 1000) if (average_gaze is not None and not math.isnan(average_gaze) and not math.isinf(average_gaze)) else None
 
-                # worst_perclos = max(perclos_values) if perclos_values else None
+                    # worst_perclos = max(perclos_values) if perclos_values else None
 
-                # pct_tired = tired_values.count(True) / len(tired_values) if tired_values else None
-                # pct_distracted = distracted_values.count(True) / len(distracted_values) if distracted_values else None
-                # pct_looking_away = looking_away_values.count(True) / len(looking_away_values) if looking_away_values else None
+                    # pct_tired = tired_values.count(True) / len(tired_values) if tired_values else None
+                    # pct_distracted = distracted_values.count(True) / len(distracted_values) if distracted_values else None
+                    # pct_looking_away = looking_away_values.count(True) / len(looking_away_values) if looking_away_values else None
 
-                pct_present = sum(present_values) / len(present_values) if present_values else 0
+                    pct_present = sum(present_values) / len(present_values) if present_values else 0
 
-                i = 0
-                ear_values = []
-                ear_left_values = []
-                ear_right_values = []
+                    i = 0
+                    ear_values = []
+                    ear_left_values = []
+                    ear_right_values = []
 
-                gaze_values = []
-                # perclos_values = []
-                # tired_values = []
-                # distracted_values = []
-                # looking_away_values = []
-                present_values = []
-
-
-                # Write data point to the "XL" bucket
-                try:
-                    # Names do go on the wire but take minimal space in db
-                    value = f"fatigue,host={hostname} present={pct_present}"
-
-                    # All the perclos values are already % closed over some time frame, so there seems no better to averaging
-                    # them further
-
-                    if (pct_present > 0):
-                        if (perclos_rolling_score_v2 != None):
-                            value += f",perclosV2={perclos_rolling_score_v2}"
-                        if (perclos_rolling_score_v3 != None):
-                            value += f",perclosV3={perclos_rolling_score_v3}"
-                        if (average_ear != None):
-                            value += f",ear={average_ear}"
-                            value += f",earLeft={average_ear_left}"
-                            value += f",earRight={average_ear_right}"
-                        if (average_gaze != None):
-                            value += f",gaze={average_gaze}"
+                    gaze_values = []
+                    # perclos_values = []
+                    # tired_values = []
+                    # distracted_values = []
+                    # looking_away_values = []
+                    present_values = []
 
 
-                    # Don't record blinks if I'm not at the computer
-                    if (pct_present > 0.8):
-                        if (blink_count_per_min != None):
-                            value += f",blinks={blink_count_per_min}"
-                        # Already a rolling average
-                        if (blink_durations != None):
-                            value += f",blinkDurations={blink_durations}"
-                        value += f",blinksV2={blink_count_recent}"
-                        value += f",blinkDurationsV2={blink_durations_recent}"
+                    # Write data point to the "XL" bucket
+                    try:
+                        # Names do go on the wire but take minimal space in db
+                        value = f"fatigue,host={hostname} present={pct_present}"
+
+                        # All the perclos values are already % closed over some time frame, so there seems no better to averaging
+                        # them further
+
+                        if (pct_present > 0):
+                            if (perclos_rolling_score_v2 != None):
+                                value += f",perclosV2={perclos_rolling_score_v2}"
+                            if (perclos_rolling_score_v3 != None):
+                                value += f",perclosV3={perclos_rolling_score_v3}"
+                            if (average_ear != None):
+                                value += f",ear={average_ear}"
+                                value += f",earLeft={average_ear_left}"
+                                value += f",earRight={average_ear_right}"
+                            if (average_gaze != None):
+                                value += f",gaze={average_gaze}"
+
+
+                        # Don't record blinks if I'm not at the computer
+                        if (pct_present > 0.8):
+                            if (blink_count_per_min != None):
+                                value += f",blinks={blink_count_per_min}"
+                            # Already a rolling average
+                            if (blink_durations != None):
+                                value += f",blinkDurations={blink_durations}"
+                            value += f",blinksV2={blink_count_recent}"
+                            value += f",blinkDurationsV2={blink_durations_recent}"
+                            value += f",fpsCapture={round(capture_fps)}"
+                            value += f",fpsProcess={round(process_fps)}"
+                            value += f",queue={round(frame_queue_for_processing.qsize())}"
+
+                        value += f" {int(time.time())}"
+                        print(f"Writing data to InfluxDB: {value}")
+                        client.write([value],write_precision='s')
+                    except Exception as e:
+                        # Improved error message
+                        error_type = type(e).__name__
+                        print(f"Failed to write data to InfluxDB due to {error_type}: {e}")
+                        print("Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
+                elif mode == 3:
+                    try:
+                        # Names do go on the wire but take minimal space in db
+                        value = f"fatigue,host={hostname} blinksV1={len(blink_recorder._blinks_in_last_period)}"
+
                         value += f",fpsCapture={round(capture_fps)}"
                         value += f",fpsProcess={round(process_fps)}"
                         value += f",queue={round(frame_queue_for_processing.qsize())}"
 
-                    value += f" {int(time.time())}"
-                    print(f"Writing data to InfluxDB: {value}")
-                    client.write([value],write_precision='s')
-                except Exception as e:
-                    # Improved error message
-                    error_type = type(e).__name__
-                    print(f"Failed to write data to InfluxDB due to {error_type}: {e}")
-                    print("Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
+                        value += f" {int(time.time())}"
+                        print(f"Writing data to InfluxDB: {value}")
+                        client.write([value],write_precision='s')
+                    except Exception as e:
+                        # Improved error message
+                        error_type = type(e).__name__
+                        print(f"Failed to write data to InfluxDB due to {error_type}: {e}")
+                        print("Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
+
 
 
             #print(f"Got frame from webcam orig={int(frame.nbytes / 1024)}kb processed={int(processed.nbytes / 1024)}kb")
@@ -1102,7 +1141,7 @@ def process_frames():
             if True:
                 # show the frame on screen
                 tX = time.perf_counter()
-                cv2.imshow("Press 'q' to terminate, 'c' to toggle saving (for debug), 's' to save buffered frames, 'b' to buffer frames (for training), 'p' to print timings, 'f' to change flip_mode", processed)
+                cv2.imshow("Press 'q' to terminate, 'c' to toggle saving (for debug), 's' to save buffered frames, 'b' to buffer frames (for training), 'p' to print timings, 'l' to save one frame, 'd' for debug", processed)
                 if (print_timings):
                     print(f"Time to draw frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
@@ -1126,6 +1165,10 @@ def process_frames():
                     print_timings = not print_timings
                 elif key == ord('e'):
                     flip_eye_mode = not flip_eye_mode
+                elif key == ord('l'):
+                    capture_single_frame_mode = True
+                elif key == ord('d'):
+                    debug_mode = True
                 if (print_timings):
                     print(f"Time to wait key: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
@@ -1138,14 +1181,14 @@ def process_frames():
 
 # Create and start the threads
 thread_capture = threading.Thread(target=capture_frames, daemon=True)
-# thread_save = threading.Thread(target=save_frames, daemon=True)
-# thread_process = threading.Thread(target=process_frames, daemon=True)
+thread_save = threading.Thread(target=save_frames, daemon=True)
+thread_process = threading.Thread(target=process_frames, daemon=True)
 
 if args.input == "":
     thread_capture.start()
 
-# thread_save.start()
-# thread_process.start()
+thread_save.start()
+thread_process.start()
 
 # Keep the main thread alive
 try:
@@ -1157,10 +1200,10 @@ print("done1")
 done = True
 thread_capture.join()
 print("thread_capture ended")
-# thread_save.join()
-# print("thread_save ended")
-# thread_process.join()
-# print("thread_process ended")
+thread_save.join()
+print("thread_save ended")
+thread_process.join()
+print("thread_process ended")
 
 os._exit(-1)
 print("done2")
