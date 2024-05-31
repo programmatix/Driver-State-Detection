@@ -7,7 +7,7 @@ EYES_LMS_NUMS = [33, 133, 160, 144, 158, 153, 362, 263, 385, 380, 387, 373]
 LEFT_IRIS_NUM = 468
 RIGHT_IRIS_NUM = 473
 
-class EyeDetector:
+class EyeDetector2:
 
     def __init__(self, show_processing: bool = False):
         """

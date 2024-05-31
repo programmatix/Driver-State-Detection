@@ -2,7 +2,7 @@
 # start "" /high python main.py
 # ($Process = Start-Process "python" -ArgumentList "main.py" -PassThru).PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High
 
-
+import traceback
 import argparse
 import cv2
 import math
@@ -244,22 +244,22 @@ mode = args.mode
 
 
 def open_camera():
-    cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
+    #cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(args.camera)
     # cap.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840) # 4k/high_res
     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160) # 4k/high_res
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
-    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
-    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
-    cap.set(cv2.CAP_PROP_FPS, 60) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) # 4k/high_res
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080) # 4k/high_res
+    cap.set(cv2.CAP_PROP_FPS, 120) # 4k/high_res
 
     print(f"Camera supports CAP_PROP_ZOOM: {cap.get(cv2.CAP_PROP_ZOOM)}")
     print(f"Camera supports CAP_PROP_FOURCC: {cap.get(cv2.CAP_PROP_FOURCC)}")
 
     # Request compression
-    #fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     # fourcc = cv2.VideoWriter_fourcc(*'X265')
     # print(f"Setting cap CAP_PROP_FOURCC to X265: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
     #
@@ -269,8 +269,8 @@ def open_camera():
     # fourcc = cv2.VideoWriter_fourcc(*'XVID')
     # print(f"Setting cap CAP_PROP_FOURCC to XVID: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
     #
-    # fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    # print(f"Setting cap CAP_PROP_FOURCC to MJPG: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
+    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    print(f"Setting cap CAP_PROP_FOURCC to MJPG: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
     #
     # fourcc = cv2.VideoWriter_fourcc(*'MP4V')
     # print(f"Setting cap CAP_PROP_FOURCC to MP4V: ", cap.set(cv2.CAP_PROP_FOURCC, fourcc))
@@ -599,127 +599,7 @@ def process_frames():
 
             processed = frame.copy()
 
-
-            # tX = time.perf_counter()
-            # processed = compress_frame(frame, 80)
-            # if (print_timings):
-            #     print(f"Time to compress frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-
-            # Do a quick pass to find the face and zoom in on the left eye
-            # Doesn't work currently
-            #
-            # lms = detector.process(processed).multi_face_landmarks
-            #
-            # if processed is None or len(processed.shape) != 3:
-            #     print("bad processed 426")
-            #     exit(-1)
-            #
-            # if lms:
-            #     landmarks = _get_landmarks(lms)
-            #
-            #     # Indices for the face landmarks in the 468-point model
-            #     FACE_INDICES = list(range(0, 468))
-            #
-            #     # Get the face landmarks
-            #     face_landmarks = landmarks[FACE_INDICES]
-            #
-            #     # Calculate the bounding box of the face
-            #     face_bbox = (min(face_landmarks[:, 0]),  # x_min
-            #                  min(face_landmarks[:, 1]),  # y_min
-            #                  max(face_landmarks[:, 0]),  # x_max
-            #                  max(face_landmarks[:, 1]))  # y_max
-            #
-            #     # Convert the bounding box coordinates to the frame scale
-            #     face_bbox = (int(face_bbox[0] * processed.shape[1]),  # x_min
-            #                  int(face_bbox[1] * processed.shape[0]),  # y_min
-            #                  int(face_bbox[2] * processed.shape[1]),  # x_max
-            #                  int(face_bbox[3] * processed.shape[0]))  # y_max
-            #
-            #     # Extract the ROI from the processed frame
-            #     face_roi = processed[face_bbox[1]:face_bbox[3], face_bbox[0]:face_bbox[2]]
-            #
-            #     # Resize the ROI to the original frame size
-            #     # face_zoomed_in = cv2.resize(face_roi, (tiny.shape[1], tiny.shape[0]), interpolation=cv2.INTER_LINEAR)
-            #
-            #     processed = face_roi
-            #     if processed is None or len(processed.shape) != 3:
-            #         print("bad processed 459")
-            #         exit(-1)
-            #
-            #     processed = frame
-
-                # Indices for the left eye landmarks in the 468-point model
-                # LEFT_EYE_INDICES = list(range(33, 47))
-                #
-                # # Get the left eye landmarks
-                # left_eye_landmarks = landmarks[LEFT_EYE_INDICES]
-                #
-                # # Calculate the bounding box of the left eye
-                # left_eye_bbox = (min(left_eye_landmarks[:, 0]),  # x_min
-                #                  min(left_eye_landmarks[:, 1]),  # y_min
-                #                  max(left_eye_landmarks[:, 0]),  # x_max
-                #                  max(left_eye_landmarks[:, 1]))  # y_max
-                #
-                # # Convert the bounding box coordinates to the frame scale
-                # left_eye_bbox = (int(left_eye_bbox[0] * frame.shape[1]),  # x_min
-                #                  int(left_eye_bbox[1] * frame.shape[0]),  # y_min
-                #                  int(left_eye_bbox[2] * frame.shape[1]),  # x_max
-                #                  int(left_eye_bbox[3] * frame.shape[0]))  # y_max
-                #
-                # # Extract the ROI from the processed frame
-                # left_eye_roi = frame[left_eye_bbox[1]:left_eye_bbox[3], left_eye_bbox[0]:left_eye_bbox[2]]
-
-                # Resize the ROI to the original frame size
-                # left_eye_zoomed_in = cv2.resize(left_eye_roi, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
-
-                # frame = left_eye_roi
-
-
-
-            # if processed is None or len(processed.shape) != 3:
-            #     print("bad processed 485")
-            #     exit(-1)
-
-            # height, width = processed.shape[:2]  # Get the height and width of the image
-            # processed = cv2.resize(processed, (width//2, height//2))  # Resize the image to half its original size
-
-            # transform the BGR frame in grayscale
-            # tX = time.perf_counter()
-            # processed = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
-            # print(f"gray={int(gray.nbytes / 1024)}kb")
-            # if (print_timings):
-            #     print(f"Time to convert to grayscale: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-
-
-            # if processed is None or len(processed.shape) != 3:
-            #     print("bad processed 572")
-            #     exit(-1)
-            # tX = time.perf_counter()
-            # edges = cv2.Canny(processed, threshold1=50, threshold2=70)
-            # if (print_timings):
-            #     print(f"Time to Canny: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-
-            #edges_colored = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-            # processed = cv2.addWeighted(processed, 0.4, edges, 0.5, 0)
-
-            # get the frame size
             frame_size = processed.shape[1], processed.shape[0]
-
-            # apply a bilateral filter to lower noise but keep frame details. create a 3D matrix from processed image to give it to the model
-            # tX = time.perf_counter()
-            # filtered = cv2.bilateralFilter(processed, 5, 10, 10)
-
-            # This takes the grayscale image and triples it so we end up with the same size image!
-            # But without that, face processing crashes
-            # processed = np.expand_dims(processed, axis=2)
-            # processed = np.concatenate([processed, processed, processed], axis=2)
-
-            # if (print_timings):
-            #     print(f"Time to bilateral filter: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-
-            # if processed is None or len(processed.shape) != 3:
-            #     print("bad processed 525")
-            #     exit(-1)
 
             prediction = None
 
@@ -962,7 +842,7 @@ def process_frames():
                 else:
                     present_values.append(0)
             elif mode == 3:
-                img: MediapipeEARMultiFrame.ProcessedImage = MediapipeEARMultiFrame.process_image(detector, processed, profile=print_timings)
+                img: MediapipeEARMultiFrame.ProcessedImage = MediapipeEARMultiFrame.process_image(detector, processed, debug=debug_mode, profile=print_timings)
                 if img is not None:
                     rolling_buffer.append(img)
 
@@ -1112,7 +992,7 @@ def process_frames():
                 elif mode == 3:
                     try:
                         # Names do go on the wire but take minimal space in db
-                        value = f"fatigue,host={hostname} blinksV1={len(blink_recorder._blinks_in_last_period)}"
+                        value = f"fatigue,host={hostname} blinks3V1={len(blink_recorder._blinks_in_last_period)}"
 
                         value += f",fpsCapture={round(capture_fps)}"
                         value += f",fpsProcess={round(process_fps)}"
@@ -1137,8 +1017,8 @@ def process_frames():
             #     print("bad processed 756")
             #     exit(-1)
 
-            # if (frame_idx % 60 == 0):
-            if True:
+            if (frame_idx % 20 == 0):
+            # if True:
                 # show the frame on screen
                 tX = time.perf_counter()
                 cv2.imshow("Press 'q' to terminate, 'c' to toggle saving (for debug), 's' to save buffered frames, 'b' to buffer frames (for training), 'p' to print timings, 'l' to save one frame, 'd' for debug", processed)
@@ -1168,7 +1048,7 @@ def process_frames():
                 elif key == ord('l'):
                     capture_single_frame_mode = True
                 elif key == ord('d'):
-                    debug_mode = True
+                    debug_mode = not debug_mode
                 if (print_timings):
                     print(f"Time to wait key: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
@@ -1177,7 +1057,8 @@ def process_frames():
 
             i += 1
     except Exception as e:
-        print("process_frames thread ended: " + e)
+        print("process_frames thread ended: " + str(e))
+        print("Stack trace: " + traceback.format_exc())
 
 # Create and start the threads
 thread_capture = threading.Thread(target=capture_frames, daemon=True)

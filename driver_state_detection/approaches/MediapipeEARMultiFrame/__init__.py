@@ -3,12 +3,117 @@ import socket
 import time
 from datetime import datetime
 from glob import glob
+from numpy import linalg as LA
 
 import cv2
 import mediapipe as mp
 import numpy as np
-from Eye_Dector_Module import EyeDetector as EyeDet2
+# import Eye_Dector_Module2
 import TrainingConstants as tc
+
+EYES_LMS_NUMS = [33, 133, 160, 144, 158, 153, 362, 263, 385, 380, 387, 373]
+LEFT_IRIS_NUM = 468
+RIGHT_IRIS_NUM = 473
+
+class EyeDetector2:
+
+    def __init__(self, show_processing: bool = False):
+        """
+        Eye dector class that contains various method for eye aperture rate estimation and gaze score estimation
+
+        Parameters
+        ----------
+        show_processing: bool
+            If set to True, shows frame images during the processing in some steps (default is False)
+
+        Methods
+        ----------
+        - show_eye_keypoints: shows eye keypoints in the frame/image
+        - get_EAR: computes EAR average score for the two eyes of the face
+        - get_Gaze_Score: computes the Gaze_Score (normalized euclidean distance between center of eye and pupil)
+            of the eyes of the face
+        """
+
+        self.show_processing = show_processing
+
+    @staticmethod
+    def _calc_EAR_eye(eye_pts):
+        """
+        Computer the EAR score for a single eyes given it's keypoints
+        :param eye_pts: numpy array of shape (6,2) containing the keypoints of an eye
+        :return: ear_eye
+            EAR of the eye
+        """
+        ear_eye = (LA.norm(eye_pts[2] - eye_pts[3]) + LA.norm(
+            eye_pts[4] - eye_pts[5])) / (2 * LA.norm(eye_pts[0] - eye_pts[1]))
+        '''
+        EAR is computed as the mean of two measures of eye opening (see mediapipe face keypoints for the eye)
+        divided by the eye lenght
+        '''
+        return ear_eye
+
+    def show_eye_keypoints(self, color_frame, landmarks):
+        """
+        Shows eyes keypoints found in the face, drawing red circles in their position in the frame/image
+
+        Parameters
+        ----------
+        color_frame: numpy array
+            Frame/image in which the eyes keypoints are found
+        landmarks: landmarks: numpy array
+            List of 478 mediapipe keypoints of the face
+        """
+
+        # cv2.circle(color_frame, (landmarks[LEFT_IRIS_NUM, :2] * frame_size).astype(np.uint32),
+        #            3, (255, 255, 255), cv2.FILLED)
+        # cv2.circle(color_frame, (landmarks[RIGHT_IRIS_NUM, :2] * frame_size).astype(np.uint32),
+        #            3, (255, 255, 255), cv2.FILLED)
+
+        frame_size = color_frame.shape[1], color_frame.shape[0]
+        for n in EYES_LMS_NUMS:
+            x = int(landmarks[n, 0] * frame_size[0])
+            y = int(landmarks[n, 1] * frame_size[1])
+            cv2.circle(color_frame, (x, y), 1, (0, 0, 255), -1)
+        return
+
+    def get_EAR(self, landmarks):
+        """
+        Computes the average eye aperture rate of the face
+
+        Parameters
+        ----------
+        frame: numpy array
+            Frame/image in which the eyes keypoints are found
+        landmarks: landmarks: numpy array
+            List of 478 mediapipe keypoints of the face
+
+        Returns
+        --------
+        ear_score: float
+            EAR average score between the two eyes
+            The EAR or Eye Aspect Ratio is computed as the eye opennes divided by the eye lenght
+            Each eye has his scores and the two scores are averaged
+        """
+
+        # numpy array for storing the keypoints positions of the left and right eyes
+        eye_pts_l = np.zeros(shape=(6, 2))
+        eye_pts_r = eye_pts_l.copy()
+
+        # get the face mesh keypoints
+        for i in range(len(EYES_LMS_NUMS)//2):
+            # array of x,y coordinates for the left eye reference point
+            eye_pts_l[i] = landmarks[EYES_LMS_NUMS[i], :2]
+            # array of x,y coordinates for the right eye reference point
+            eye_pts_r[i] = landmarks[EYES_LMS_NUMS[i+6], :2]
+
+        ear_left = self._calc_EAR_eye(eye_pts_l)  # computing the left eye EAR score
+        ear_right = self._calc_EAR_eye(eye_pts_r)  # computing the right eye EAR score
+
+        # computing the average EAR score
+        ear_avg = (ear_left + ear_right) / 2
+
+        return ear_avg, ear_left, ear_right
+
 
 class OriginalImage:
     def __init__(self, filename, original_image):
@@ -105,7 +210,7 @@ def get_landmarks(detector, img, debug):
     if debug:
         print(f"Processing image with detector")
     # results = detector.process(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
-    results = detector.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    results = detector.process(img)
     if results.multi_face_landmarks:
         return results.multi_face_landmarks
     else:
@@ -179,34 +284,69 @@ def adjust_bounding_box(min_x, min_y, max_x, max_y, img, debug):
 
 
 def process_image(detector, original: any, debug=False, profile=False) -> ProcessedImage:
+    tStart = time.perf_counter()
     tX = time.perf_counter()
-    img_colour = original.copy()
+    img_colour = original#.copy()
     out = ProcessedImage()
-    Eye_det = EyeDet2(show_processing=False)
+    Eye_det2 = EyeDetector2(show_processing=False)
     #raise Exception("Not implemented")
-    lms = get_landmarks(detector, img_colour, debug)
+    tX = time.perf_counter()
+    cvt = cv2.cvtColor(img_colour, cv2.COLOR_BGR2RGB)
+    if (profile):
+        print(f"\tTime to process frame - convert: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - tStart) * 1000}")
+
+    tX = time.perf_counter()
+
+    lms = get_landmarks(detector, cvt, debug)
     if lms is not None:
+        if (profile):
+            print(f"\tTime to process frame - get_landmarks: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - tStart) * 1000}")
+
+        tX = time.perf_counter()
         landmarks = _get_landmarks(lms)
         landmarks2 = lms[0].landmark
 
-        min_x, min_y, max_x, max_y = calculate_bounding_box(landmarks2, img_colour, left_eye_landmarks, debug)
-        min_x, min_y, max_x, max_y = adjust_bounding_box(min_x, min_y, max_x, max_y, img_colour, debug)
+        if (profile):
+            print(f"\tTime to process frame - _get_landmarks: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - tStart) * 1000}")
 
-        annotated = img_colour.copy()
-        #Eye_det.show_eye_keypoints(color_frame=annotated, landmarks=landmarks)
+        if debug:
+            tX = time.perf_counter()
 
-        ear, ear_left, ear_right = Eye_det.get_EAR(None, landmarks=landmarks)
+            min_x, min_y, max_x, max_y = calculate_bounding_box(landmarks2, img_colour, left_eye_landmarks, debug)
+            min_x, min_y, max_x, max_y = adjust_bounding_box(min_x, min_y, max_x, max_y, img_colour, debug)
+
+            if (profile):
+                print(f"\tTime to process frame - calc and adjust bounding box: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - tStart) * 1000}")
+
+            annotated = img_colour#.copy()
+            Eye_det2.show_eye_keypoints(color_frame=annotated, landmarks=landmarks)
+
+        tX = time.perf_counter()
+
+        # Trying to adjust for flipping
+        ear, ear_left, ear_right = Eye_det2.get_EAR(landmarks=landmarks)
+        # ear, ear_right, ear_left = Eye_det2.get_EAR(landmarks=landmarks)
+
+        if (profile):
+            print(f"\tTime to process frame - EAR: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - tStart) * 1000}")
+
+        tX = time.perf_counter()
+
         out.ear = ear
         out.ear_left = ear_left
         out.ear_right = ear_right
 
-        eye_img = annotated[min_y:max_y, min_x:max_x]
-        eye_img = cv2.resize(eye_img, (tc.EYE_IMAGE_WIDTH, tc.EYE_IMAGE_HEIGHT))
+        if debug:
+            eye_img = annotated[min_y:max_y, min_x:max_x]
+            eye_img = cv2.resize(eye_img, (tc.EYE_IMAGE_WIDTH, tc.EYE_IMAGE_HEIGHT))
 
-        out.eye_img_final = eye_img
+            out.eye_img_final = eye_img
 
         if (profile):
-            print(f"Time to process frame: {(time.perf_counter() - tX) * 1000}")
+            print(f"\tTime to process frame - image: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - tStart) * 1000}")
+
+        if (profile):
+            print(f"Time to process frame: {(time.perf_counter() - tStart) * 1000}")
         return out
 
 
