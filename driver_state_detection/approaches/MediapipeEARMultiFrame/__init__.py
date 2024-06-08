@@ -338,9 +338,9 @@ def process_image(detector, original: any, debug=False, profile=False) -> Proces
 
         if debug:
             eye_img = annotated[min_y:max_y, min_x:max_x]
-            eye_img = cv2.resize(eye_img, (tc.EYE_IMAGE_WIDTH, tc.EYE_IMAGE_HEIGHT))
-
-            out.eye_img_final = eye_img
+            if eye_img is not None:
+                eye_img = cv2.resize(eye_img, (tc.EYE_IMAGE_WIDTH, tc.EYE_IMAGE_HEIGHT))
+                out.eye_img_final = eye_img
 
         if (profile):
             print(f"\tTime to process frame - image: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - tStart) * 1000}")
@@ -386,31 +386,33 @@ def analyse_images(images: list[ProcessedImage], N: int, profile=False) -> list[
     return out
 
 def cram_homogenous_images(images: list[AnalysedImage], output_x, image_selector, image_annotator):
-    img_width = images[0].processed.eye_img_final.shape[1]
-    img_height = images[0].processed.eye_img_final.shape[0]
+    if len(images) == 0 and images[0].processed.eye_img_final is not None:
+        img_width = images[0].processed.eye_img_final.shape[1]
+        img_height = images[0].processed.eye_img_final.shape[0]
 
-    num_cols = int(output_x / img_width)
-    num_rows = (len(images) // num_cols) + 1
-    output_y = num_rows * img_height
+        num_cols = int(output_x / img_width)
+        num_rows = (len(images) // num_cols) + 1
+        output_y = num_rows * img_height
 
-    out = np.zeros((output_y, output_x, 3), dtype=np.uint8)
+        out = np.zeros((output_y, output_x, 3), dtype=np.uint8)
 
-    for i in range(min(num_rows * num_cols, len(images))):
-        row = i // num_cols
-        col = i % num_cols
-        x = col * img_width
-        y = row * img_height
+        for i in range(min(num_rows * num_cols, len(images))):
+            row = i // num_cols
+            col = i % num_cols
+            x = col * img_width
+            y = row * img_height
 
-        # Use the image_selector function to select the image
-        selected_image = image_selector(images[i]).copy()
+            # Use the image_selector function to select the image
+            selected_image = image_selector(images[i]).copy()
 
-        # Use the image_annotator function to annotate the image
-        annotated_image = image_annotator(images[i], selected_image, i)
+            # Use the image_annotator function to annotate the image
+            annotated_image = image_annotator(images[i], selected_image, i)
 
-        # Resize and place the annotated image in the output image
-        out[y:y + img_height, x:x + img_width] = cv2.resize(annotated_image, (img_width, img_height))
+            # Resize and place the annotated image in the output image
+            out[y:y + img_height, x:x + img_width] = cv2.resize(annotated_image, (img_width, img_height))
 
-    return out
+        return out
+    return None
 
 def process_and_analyse_frames(images: list[any]) -> list[AnalysedImage]:
     processed = process_frames(images)
