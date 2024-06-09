@@ -192,7 +192,7 @@ try:
 except KeyboardInterrupt:
     print("Stopping...")
 print("done1")
-done = True
+gc.done = True
 thread_capture.join()
 print("thread_capture ended")
 thread_save.join()

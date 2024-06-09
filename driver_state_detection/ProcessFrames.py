@@ -18,6 +18,9 @@ from ModelPredict import predict_multi
 from RealTimeEARPlot import RealTimeEARPlot
 from RealTimePERCLOSPlot import RealTimePERCLOSPlot
 from TrainingProcess import process_image
+from approaches.MediapipeEARMultiFrame.Approach import handle_new_second, handle_image, write_to_influx, \
+    handle_new_minute
+from approaches.MediapipeEARMultiFrame.ApproachContext import ApproachContext
 
 
 # from influxdb_client_3 import InfluxDBClient3
@@ -68,31 +71,37 @@ def process_frames(gc: GlobalContext):
 
         frame_idx = 0
         prev_second = None
+        prev_minute = None
         rolling_buffers = [[]]
         rolling_buffer = []
-        blink_recorder = MediapipeEARMultiFrame.BlinkRecorder(60)
+
         currently_blinking = False
         last_processed = None
+        ac = None
+        if gc.mode == 3:
+            ac = ApproachContext(gc)
 
         while gc.done is False:
             t_now = time.perf_counter()
             period_start_time = time.perf_counter()
             current_time = datetime.now()
             current_second = current_time.strftime("%S")
+            current_minute = current_time.strftime("%M")
             text_list = []
 
             if prev_second is None or prev_second != current_second:
                 prev_second = current_second
                 gc.process_fps = frame_idx
 
-                if last_processed is not None:
-                    timestamp = current_time.strftime("%Y-%m-%d_%H-%M-%S") + "-" + str(frame_idx)
-                    filename1 = f"output_images/{timestamp}-proc.jpg"
-                    cv2.imwrite(filename1, last_processed)
+                handle_new_second(ac, current_time, frame_idx)
 
                 frame_idx = 0  # Reset frame index for each new second
             else:
                 frame_idx += 1
+
+            if prev_minute is None or prev_minute != current_minute:
+                prev_minute = current_minute
+                handle_new_minute(ac, current_time, frame_idx)
 
             fps = i / (t_now - t_last_save)
             if fps == 0:
@@ -106,34 +115,7 @@ def process_frames(gc: GlobalContext):
 
             #print(f"Got frame for processing {frame.nbytes / 1024}kb")
 
-            # if the frame comes from webcam, flip it so it looks like a mirror.
-            tX = time.perf_counter()
-            # if args.camera == 0:
-            #     frame = cv2.flip(frame, 2)
-            #elif args.camera == 1:
-
-            #print(f"Flip is {args.flip}")
-            # frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            if gc.flip_mode == 1:
-                #print(f"Flipping")
-
-                # This is 100% one of the modes I want, in this order!
-                # The Pixel has its own algo for if/how it flips the output also.
-                frame = cv2.flip(frame, 2)
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-            elif gc.flip_mode == 2:
-                #print(f"Flipping")
-
-                # This is 100% one of the modes I want, in this order!
-                # The Pixel has its own algo for if/how it flips the output also.
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                frame = cv2.flip(frame, 1)
-            elif gc.flip_mode == 3:
-                frame = cv2.flip(frame, 1)
-            # frame = cv2.flip(frame, 2)
-            # frame = zoom_in(frame, 2)
-            if (gc.print_timings):
-                print(f"Time to flip frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+            frame = flip_frame(frame, gc, t_now)
 
             # start the tick counter for computing the processing time for each frame
             # e1 = cv2.getTickCount()
@@ -146,6 +128,7 @@ def process_frames(gc: GlobalContext):
             frame_size = processed.shape[1], processed.shape[0]
 
             prediction = None
+            tMode = time.perf_counter()
 
             if gc.mode == 0:
                 tX = time.perf_counter()
@@ -388,48 +371,12 @@ def process_frames(gc: GlobalContext):
                 else:
                     present_values.append(0)
             elif gc.mode == 3:
-                tMode = time.perf_counter()
-                img: MediapipeEARMultiFrame.ProcessedImage = MediapipeEARMultiFrame.process_image(detector, processed,
-                                                                                                  debug=gc.debug_mode,
-                                                                                                  profile=gc.print_timings)
-                if img is not None:
-                    rolling_buffer.append(img)
+                ac: ApproachContext = ac
+                handle_image(ac, processed, text_list)
 
-                    images_to_keep = 150
-                    while (len(rolling_buffer) >= images_to_keep):
-                        rolling_buffer.pop(0)
-                    if len(rolling_buffer) > images_to_keep - 10:
-                        analysed: list[MediapipeEARMultiFrame.AnalysedImage] = MediapipeEARMultiFrame.analyse_images(
-                            rolling_buffer, 4, profile=gc.print_timings)
-                        latest = analysed[-1]
-                        currently_blinking, blinks_in_last_period, blinks_total = blink_recorder.record(latest)
-
-                        text_list.append(f"Avg ear left: {latest.avg_ear_left}")
-                        text_list.append(f"Ear left: {latest.processed.ear_left}")
-                        text_list.append(f"Prev ear left: {latest.prev_ear_left}")
-                        text_list.append(f"Ear left diff: {latest.ear_left_diff}")
-                        text_list.append(f"Ear left diff ratio: {latest.ear_left_diff_ratio}")
-                        text_list.append(f"Currently blinking: {currently_blinking}")
-                        text_list.append(f"Blinks in last {blink_recorder.period_seconds}s: {blinks_in_last_period}")
-                        text_list.append(f"Blinks ever: {blinks_total}")
-
-                        if gc.debug_mode:
-                            tX = time.perf_counter()
-                            image_selector = lambda x: x.processed.eye_img_final
-                            debug_draw = MediapipeEARMultiFrame.cram_homogenous_images(analysed, 1000, image_selector,
-                                                                                       MediapipeEARMultiFrame.image_annotator)
-
-                            if debug_draw is not None:
-
-                                processed[0:debug_draw.shape[0], 0:debug_draw.shape[1]] = debug_draw
-                                last_processed = processed.copy()
-
-                                if (gc.print_timings):
-                                    print(
-                                        f"Time to draw debug: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
-                if (gc.print_timings):
-                    print(
-                        f"Time to do mode: {(time.perf_counter() - tMode) * 1000} {(time.perf_counter() - t_now) * 1000}")
+            if (gc.print_timings):
+                print(
+                    f"Time to do mode: {(time.perf_counter() - tMode) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
             text_list.append(f"FPS Capture: {gc.capture_fps}")
             text_list.append(f"FPS Process: {gc.process_fps}")
@@ -439,6 +386,7 @@ def process_frames(gc: GlobalContext):
             text_list.append(f"Capture mode: {gc.capture_mode}")
             text_list.append(f"Dump mode: {gc.dump_buffered_frames}")
             text_list.append(f"Buffer mode: {gc.buffer_mode}")
+            text_list.append(f"Debug mode: {gc.debug_mode}")
             text_list.append(f"Save queue: {gc.frame_queue_for_saving.qsize()}")
             text_list.append(f"Process queue: {gc.frame_queue_for_processing.qsize()}")
             text_list.append(f"Saving to influx: {gc.saving_to_influx}")
@@ -554,23 +502,7 @@ def process_frames(gc: GlobalContext):
                         print(
                             "Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
                 elif gc.mode == 3:
-                    try:
-                        # Names do go on the wire but take minimal space in db
-                        value = f"fatigue,host={hostname} blinks3V1={len(blink_recorder._blinks_in_last_period)}"
-
-                        value += f",fpsCapture={round(gc.capture_fps)}"
-                        value += f",fpsProcess={round(gc.process_fps)}"
-                        value += f",queue={round(gc.frame_queue_for_processing.qsize())}"
-
-                        value += f" {int(time.time())}"
-                        print(f"Writing data to InfluxDB: {value}")
-                        client.write([value], write_precision='s')
-                    except Exception as e:
-                        # Improved error message
-                        error_type = type(e).__name__
-                        print(f"Failed to write data to InfluxDB due to {error_type}: {e}")
-                        print(
-                            "Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
+                    write_to_influx(gc, ac)
 
             #print(f"Got frame from webcam orig={int(frame.nbytes / 1024)}kb processed={int(processed.nbytes / 1024)}kb")
 
@@ -627,3 +559,34 @@ def process_frames(gc: GlobalContext):
     except Exception as e:
         print("process_frames thread ended: " + str(e))
         print("Stack trace: " + traceback.format_exc())
+
+
+def flip_frame(frame, gc, t_now):
+    # if the frame comes from webcam, flip it so it looks like a mirror.
+    tX = time.perf_counter()
+    # if args.camera == 0:
+    #     frame = cv2.flip(frame, 2)
+    # elif args.camera == 1:
+    # print(f"Flip is {args.flip}")
+    # frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if gc.flip_mode == 1:
+        # print(f"Flipping")
+
+        # This is 100% one of the modes I want, in this order!
+        # The Pixel has its own algo for if/how it flips the output also.
+        frame = cv2.flip(frame, 2)
+        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    elif gc.flip_mode == 2:
+        # print(f"Flipping")
+
+        # This is 100% one of the modes I want, in this order!
+        # The Pixel has its own algo for if/how it flips the output also.
+        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        frame = cv2.flip(frame, 1)
+    elif gc.flip_mode == 3:
+        frame = cv2.flip(frame, 1)
+    # frame = cv2.flip(frame, 2)
+    # frame = zoom_in(frame, 2)
+    if (gc.print_timings):
+        print(f"Time to flip frame: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - t_now) * 1000}")
+    return frame

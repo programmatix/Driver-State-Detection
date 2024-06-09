@@ -28,8 +28,8 @@ class GlobalContext:
     buffer_mode = False
     dump_buffered_frames = False
     buffered_frames = []
-    debug_mode = False
-    flip_mode = 3
+    debug_mode = True
+    flip_mode = 0
     flip_eye_mode = False
     print_timings = False
     saving_to_influx = False
