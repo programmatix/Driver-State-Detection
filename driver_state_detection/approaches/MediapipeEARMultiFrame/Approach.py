@@ -7,6 +7,7 @@ from numpy import linalg as LA
 import cv2
 import mediapipe as mp
 import numpy as np
+from typing import List
 from typing_extensions import List
 
 # import Eye_Dector_Module2
@@ -14,9 +15,11 @@ import approaches.MediapipeEARMultiFrame.TrainingConstants as tc
 from GlobalContext import GlobalContext
 from approaches.MediapipeEARMultiFrame import ApproachContext
 from approaches.MediapipeEARMultiFrame.Model import ProcessedImage, AnalysedImage, AnalysedImageAndTimeAndContext, \
-    BlinkContext, AnalysedImageAndTime
+    BlinkContext, AnalysedImageAndTime, ImageAndFilename
 
+# This has both left and right eyes
 EYES_LMS_NUMS = [33, 133, 160, 144, 158, 153, 362, 263, 385, 380, 387, 373]
+
 LEFT_IRIS_NUM = 468
 RIGHT_IRIS_NUM = 473
 
@@ -79,7 +82,7 @@ class EyeDetector2:
         for n in EYES_LMS_NUMS:
             x = int(landmarks[n, 0] * frame_size[0])
             y = int(landmarks[n, 1] * frame_size[1])
-            cv2.circle(color_frame, (x, y), 1, (0, 0, 255), -1)
+            cv2.circle(color_frame, (x, y), 1, (0, 255, 0), -1)
         return
 
     def get_EAR(self, landmarks):
@@ -112,13 +115,14 @@ class EyeDetector2:
             # array of x,y coordinates for the right eye reference point
             eye_pts_r[i] = landmarks[EYES_LMS_NUMS[i + 6], :2]
 
-        ear_left = self._calc_EAR_eye(eye_pts_l)  # computing the left eye EAR score
-        ear_right = self._calc_EAR_eye(eye_pts_r)  # computing the right eye EAR score
+        # Frame left and right
+        ear_frame_left = self._calc_EAR_eye(eye_pts_l)  # computing the left eye EAR score
+        ear_frame_right = self._calc_EAR_eye(eye_pts_r)  # computing the right eye EAR score
 
         # computing the average EAR score
-        ear_avg = (ear_left + ear_right) / 2
+        ear_avg = (ear_frame_left + ear_frame_right) / 2
 
-        return ear_avg, ear_left, ear_right
+        return ear_avg, ear_frame_left, ear_frame_right
 
 
 class OriginalImage:
@@ -147,24 +151,24 @@ def load_images(folder, max=None) -> list[OriginalImage]:
     return images
 
 
-def process_frames(images: list[any]):
-    detector = mp.solutions.face_mesh.FaceMesh(static_image_mode=False, min_detection_confidence=0.5,
-                                               min_tracking_confidence=0.5, refine_landmarks=True)
-    processed_images: list[ProcessedImage] = []
-    image_idx = 0
-    debug = False
-    for img in images:
-        #debug = image_idx == 1
-        processed_image = process_image(detector, img, debug)
-        image_idx += 1
-        if processed_image is not None:
-            processed_images.append(processed_image)
-    return processed_images
+# def process_frames(images: list[any]):
+#     detector = mp.solutions.face_mesh.FaceMesh(static_image_mode=False, min_detection_confidence=0.5,
+#                                                min_tracking_confidence=0.5, refine_landmarks=True)
+#     processed_images: list[ProcessedImage] = []
+#     image_idx = 0
+#     debug = False
+#     for img in images:
+#         #debug = image_idx == 1
+#         processed_image = process_image(detector, img, debug)
+#         image_idx += 1
+#         if processed_image is not None:
+#             processed_images.append(processed_image)
+#     return processed_images
 
 
 # https://github.com/tensorflow/tfjs-models/blob/master/face-landmarks-detection/src/tfjs/constants.ts
 #left_eye_landmarks = [33, 7, 163, 144, 145, 153, 154, 155, 468, 246, 161, 160, 159, 158, 157, 173, 474]
-left_eye_landmarks = [
+frame_left_eye_landmarks = [
     # Lower contour.
     # 33, 7, 163, 144, 145, 153, 154, 155, 133,
     # upper contour (excluding corners).
@@ -186,7 +190,7 @@ left_eye_landmarks = [
     # 156, 70, 63, 105, 66, 107, 55, 193
 ]
 
-left_eye_iris_landmarks = [
+frame_left_eye_iris_landmarks = [
     # Center.
     468,
     # Iris right edge.
@@ -199,6 +203,27 @@ left_eye_iris_landmarks = [
     472
 ]
 
+frame_right_eye_landmarks = [
+    # Lower contour
+    # 263, 249, 390, 373, 374, 380, 381, 382, 362,
+    # Upper contour (excluding corners).
+    # 466, 388, 387, 386, 385, 384, 398,
+    # Halo x2 lower contour.
+    359, 255, 339, 254, 253, 252, 256, 341, 463,
+    # Halo x2 upper contour (excluding corners).
+    467, 260, 259, 257, 258, 286, 414,
+    # Halo x3 lower contour.
+    # 446, 261, 448, 449, 450, 451, 452, 453, 464,
+    # # Halo x3 upper contour (excluding corners).
+    # 342, 445, 444, 443, 442, 441, 413,
+    # # Halo x4 upper contour (no lower because of mesh structure) or
+    # # eyebrow inner contour.
+    # 265, 353, 276, 283, 282, 295,
+    # # Halo x5 lower contour.
+    # 372, 340, 346, 347, 348, 349, 350, 357, 465,
+    # # Halo x5 upper contour (excluding corners) or eyebrow outer contour.
+    # 383, 300, 293, 334, 296, 336, 285, 417
+]
 
 def get_landmarks(detector, img, debug):
     # if debug:
@@ -233,12 +258,12 @@ def _get_landmarks(lms):
     return biggest_face
 
 
-def calculate_bounding_box(landmarks, img, left_eye_landmarks, debug):
-    min_x = max_x = int(landmarks[left_eye_landmarks[0]].x * img.shape[1])
-    min_y = max_y = int(landmarks[left_eye_landmarks[0]].y * img.shape[0])
+def calculate_bounding_box(landmarks, img, eye_landmarks, debug):
+    min_x = max_x = int(landmarks[eye_landmarks[0]].x * img.shape[1])
+    min_y = max_y = int(landmarks[eye_landmarks[0]].y * img.shape[0])
     # if debug:
     #     print(f"Initial bounding box: {min_x}x{min_y} to {max_x}x{max_y}")
-    for i in left_eye_landmarks:
+    for i in eye_landmarks:
         x = int(landmarks[i].x * img.shape[1])
         y = int(landmarks[i].y * img.shape[0])
         min_x = min(min_x, x)
@@ -278,7 +303,7 @@ def adjust_bounding_box(min_x, min_y, max_x, max_y, img, debug):
     return min_x, min_y, max_x, max_y
 
 
-def process_image(detector, original: any, debug=False, profile=False) -> ProcessedImage:
+def process_image(ac: ApproachContext, detector, original: any, debug=False, profile=False) -> ProcessedImage:
     tStart = time.perf_counter()
     tX = time.perf_counter()
     img_colour = original  #.copy()
@@ -310,7 +335,9 @@ def process_image(detector, original: any, debug=False, profile=False) -> Proces
         if debug:
             tX = time.perf_counter()
 
-            min_x, min_y, max_x, max_y = calculate_bounding_box(landmarks2, img_colour, left_eye_landmarks, debug)
+            landmarks_to_use_bounding_box = frame_right_eye_landmarks if ac.gc.flip_eye_mode else frame_left_eye_landmarks
+
+            min_x, min_y, max_x, max_y = calculate_bounding_box(landmarks2, img_colour, landmarks_to_use_bounding_box, debug)
             min_x, min_y, max_x, max_y = adjust_bounding_box(min_x, min_y, max_x, max_y, img_colour, debug)
 
             if (profile):
@@ -318,12 +345,11 @@ def process_image(detector, original: any, debug=False, profile=False) -> Proces
                     f"\tTime to process frame - calc and adjust bounding box: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - tStart) * 1000}")
 
             annotated = img_colour  #.copy()
-            Eye_det2.show_eye_keypoints(color_frame=annotated, landmarks=landmarks)
+            #Eye_det2.show_eye_keypoints(color_frame=annotated, landmarks=landmarks)
 
         tX = time.perf_counter()
 
-        # Trying to adjust for flipping
-        ear, ear_left, ear_right = Eye_det2.get_EAR(landmarks=landmarks)
+        ear, ear_frame_left, ear_frame_right = Eye_det2.get_EAR(landmarks=landmarks)
         # ear, ear_right, ear_left = Eye_det2.get_EAR(landmarks=landmarks)
 
         if (profile):
@@ -333,8 +359,13 @@ def process_image(detector, original: any, debug=False, profile=False) -> Proces
         tX = time.perf_counter()
 
         out.ear = ear
-        out.ear_left = ear_left
-        out.ear_right = ear_right
+        out.ear_left = ear_frame_left if not ac.gc.flip_eye_mode else ear_frame_right
+        out.ear_right = ear_frame_right if not ac.gc.flip_eye_mode else ear_frame_left
+
+        ac.total_ear_left += out.ear_left
+        ac.ear_left_count += 1
+
+        #print(f"EAR frame left: {ear_frame_left} EAR frame right: {ear_frame_right} EAR left: {out.ear_left} EAR right: {out.ear_right}")
 
         if debug:
             eye_img = annotated[min_y:max_y, min_x:max_x]
@@ -352,28 +383,26 @@ def process_image(detector, original: any, debug=False, profile=False) -> Proces
         return out
 
 
-def analyse_images(images: list[ProcessedImage], N: int, profile=False) -> list[AnalysedImage]:
+def analyse_images(ac: ApproachContext, images: List[ProcessedImage], latest: ProcessedImage, profile=False) -> AnalysedImage:
     tX = time.perf_counter()
-    avg_ear_left = sum([pi.ear_left for pi in images]) / len(images)
-    out: list[AnalysedImage] = []
+    avg_ear_left = ac.avg_ear_left()
 
-    for i in range(1, len(images)):
+    highest_diff: AnalysedImage = None
+    for i in range(0, len(images)):
         pi = images[i]
-        highest_diff: AnalysedImage = None
-        for n in range(max(0, i - N), min(len(images), i)):
-            prev = images[n]
-            ai = AnalysedImage(pi, avg_ear_left, prev)
-            if highest_diff is None or ai.ear_left_diff_ratio > highest_diff.ear_left_diff_ratio:
-                highest_diff = ai
-        if highest_diff is not None:
-            out.append(highest_diff)
+
+        ear_left_diff = latest.ear_left - pi.ear_left
+        ear_left_diff_ratio = abs(ear_left_diff) / avg_ear_left
+
+        if highest_diff is None or ear_left_diff_ratio > highest_diff.ear_left_diff_ratio:
+            highest_diff = AnalysedImage(latest, avg_ear_left, pi)
 
     if (profile):
         print(f"Time to analyse images: {(time.perf_counter() - tX) * 1000}")
-    return out
+    return highest_diff
 
 
-def cram_homogenous_images(images: list[any], output_x, image_selector, image_annotator):
+def cram_homogenous_images(images: List[any], output_x, image_selector, image_annotator):
     if len(images) > 0:
         first = image_selector(images[0])
         if first is not None:
@@ -393,21 +422,23 @@ def cram_homogenous_images(images: list[any], output_x, image_selector, image_an
                 y = row * img_height
 
                 # Use the image_selector function to select the image
-                selected_image = image_selector(images[i]).copy()
+                img = image_selector(images[i])
+                if img is not None:
+                    selected_image = img.copy()
 
-                # Use the image_annotator function to annotate the image
-                annotated_image = image_annotator(images[i], selected_image, i)
+                    # Use the image_annotator function to annotate the image
+                    annotated_image = image_annotator(images[i], selected_image, i)
 
-                # Resize and place the annotated image in the output image
-                out[y:y + img_height, x:x + img_width] = cv2.resize(annotated_image, (img_width, img_height))
+                    # Resize and place the annotated image in the output image
+                    out[y:y + img_height, x:x + img_width] = cv2.resize(annotated_image, (img_width, img_height))
 
             return out
     return None
 
 
-def process_and_analyse_frames(images: list[any]) -> list[AnalysedImage]:
-    processed = process_frames(images)
-    return analyse_images(processed)
+# def process_and_analyse_frames(images: list[any]) -> list[AnalysedImage]:
+#     processed = process_frames(images)
+#     return analyse_images(processed)
 
 
 def image_annotator(ai: AnalysedImage, img, idx: int):
@@ -426,7 +457,7 @@ def image_annotator(ai: AnalysedImage, img, idx: int):
 def write_to_influx(gc: GlobalContext, ac: ApproachContext):
     try:
         # Names do go on the wire but take minimal space in db
-        value = f"fatigue,host={gc.hostname} blinks3V1={len(blink_recorder._blinks_in_last_period)}"
+        value = f"fatigue,host={gc.hostname} blinks3V1={len(ac.blink_recorder._blinks_in_last_period)}"
 
         value += f",fpsCapture={round(gc.capture_fps)}"
         value += f",fpsProcess={round(gc.process_fps)}"
@@ -443,32 +474,40 @@ def write_to_influx(gc: GlobalContext, ac: ApproachContext):
             "Please check your InfluxDB configurations, network connection, and ensure the InfluxDB service is running.")
 
 
-def handle_image(ac: ApproachContext, processed, text_list: [str]):
+def handle_image(ac: ApproachContext, processed, text_list: [str], frame_idx: int) -> AnalysedImageAndTimeAndContext:
+    recorded_blink_frame = False
+
     if processed is not None:
-        img: ProcessedImage = process_image(ac.detector, processed, debug=ac.gc.debug_mode, profile=ac.gc.print_timings)
+        img: ProcessedImage = process_image(ac, ac.detector, processed, debug=ac.gc.debug_mode, profile=ac.gc.print_timings)
+        img.frame_idx = frame_idx
         if img is not None:
             ac.rolling_buffer.append(img)
 
-            while (len(ac.rolling_buffer) >= ac.images_to_keep):
-                ac.rolling_buffer.pop(0)
-            if len(ac.rolling_buffer) > ac.images_to_keep - 10:
-                analysed: List[AnalysedImage] = analyse_images(
-                    ac.rolling_buffer, 4, profile=ac.gc.print_timings)
-                latest = analysed[-1]
-                a = ac.blink_recorder.record(latest)
+            if len(ac.rolling_buffer) > ac.params.frames_lookback:
+                while (len(ac.rolling_buffer) > ac.params.frames_lookback):
+                    ac.rolling_buffer.pop(0)
 
-                #if ac.gc.debug_mode:
-                if True:
+                latest: AnalysedImage = analyse_images(ac, ac.rolling_buffer, img,  profile=ac.gc.print_timings)
+                a = ac.blink_recorder.record(ac, latest, frame_idx)
+                recorded_blink_frame = True
+
+                if ac.gc.debug_mode:
+                # if True:
                     ac.rolling_buffer_for_debug.append(a)
 
-                text_list.append(f"Avg ear left: {latest.avg_ear_left}")
+                text_list.append(f"Frame idx: {frame_idx}")
+                text_list.append(f"Prev frame idx: {latest.prev.frame_idx}")
+                text_list.append(f"Avg ear left: {ac.avg_ear_left()}")
                 text_list.append(f"Ear left: {latest.processed.ear_left}")
                 text_list.append(f"Prev ear left: {latest.prev_ear_left}")
                 text_list.append(f"Ear left diff: {latest.ear_left_diff}")
                 text_list.append(f"Ear left diff ratio: {latest.ear_left_diff_ratio}")
-                text_list.append(f"Currently blinking: {a.bc.currently_blinking}")
-                text_list.append(f"Blinks in last {ac.blink_recorder.period_seconds}s: {a.bc.blinks_in_last_period}")
+                text_list.append(f"Blink state: {a.bc.blink_state}")
+                text_list.append(f"Current blink duration frames: {a.bc.current_blink_duration_frames}")
+                text_list.append(f"Blinks in last {ac.blink_recorder.period_frames} frames: {a.bc.blinks_in_last_period}")
                 text_list.append(f"Blinks ever: {a.bc.blinks_total}")
+
+                return a
 
                 # if ac.gc.debug_mode:
                 #     image_selector = lambda x: x.processed.eye_img_final
@@ -478,8 +517,35 @@ def handle_image(ac: ApproachContext, processed, text_list: [str]):
                 #         processed[0:debug_draw.shape[0], 0:debug_draw.shape[1]] = debug_draw
                 #         last_processed = processed.copy()
 
+    if not recorded_blink_frame:
+        ac.blink_recorder.record_empty(ac)
+
+# def handle_image_for_training(ac: ApproachContext, processed, all_images: List[ImageAndFilename], current_index: int, text_list: [str]):
+#     if processed is not None:
+#         img: ProcessedImage = process_image(ac, ac.detector, processed, debug=ac.gc.debug_mode, profile=ac.gc.print_timings)
+#         if img is not None and current_index > ac.params.frames_lookback
+#             images = all_images[current_index - ac.params.frames_lookback:current_index - 1]
+#
+#             latest: AnalysedImage = analyse_images(ac, ac.rolling_buffer[-ac.params.frames_lookback:-1], img)
+#             a = ac.blink_recorder.record(ac, latest)
+#
+#             if ac.gc.debug_mode:
+#                 # if True:
+#                 ac.rolling_buffer_for_debug.append(a)
+#
+#             text_list.append(f"Avg ear left: {ac.avg_ear_left()}")
+#             text_list.append(f"Ear left: {latest.processed.ear_left}")
+#             text_list.append(f"Prev ear left: {latest.prev_ear_left}")
+#             text_list.append(f"Ear left diff: {latest.ear_left_diff}")
+#             text_list.append(f"Ear left diff ratio: {latest.ear_left_diff_ratio}")
+#             text_list.append(f"Currently blinking: {a.bc.currently_blinking}")
+#             text_list.append(f"Blinks in last {ac.blink_recorder.period_seconds}s: {a.bc.blinks_in_last_period}")
+#             text_list.append(f"Blinks ever: {a.bc.blinks_total}")
+
 
 def select_image2(x: AnalysedImageAndTimeAndContext) -> np.ndarray:
+    if x.ai.ai.processed.eye_img_final is None:
+        return None
 
     resized_orig = cv2.resize(x.ai.ai.processed.eye_img_orig, (tc.EYE_IMAGE_WIDTH, tc.EYE_IMAGE_HEIGHT))
     # Create a black image of the same size as the original image
@@ -502,17 +568,17 @@ def image_annotator2(ai: AnalysedImageAndTimeAndContext, img, idx: int):
                 f"{round(ai.ai.ai.processed.ear_left * 100)} {round(ai.ai.ai.ear_left_diff * 100)} {round(ai.ai.ai.ear_left_diff_ratio, 1)}",
                 (1, 7), cv2.FONT_HERSHEY_SIMPLEX, 0.35, colour, 1)
     cv2.putText(img,
-                f"b={'T' if ai.bc.currently_blinking else 'F'} blinks={ai.bc.blinks_total}",
+                f"b={'T' if ai.bc.currently_blinking() else 'F'} blinks={ai.bc.blinks_total}",
                 (1, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.35, colour, 1)
-    cv2.putText(img,
-                f"{ai.ai.timestamp.strftime('%H:%M:%S.%f')[:-3]}-{idx}",
-                (1, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.35, colour, 1)
+    # cv2.putText(img,
+    #             f"{ai.ai.timestamp.strftime('%H:%M:%S.%f')[:-3]}-{idx}",
+    #             (1, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.35, colour, 1)
     return img
 
 
 def handle_new_second(ac: ApproachContext, current_time, frame_idx):
-    handle_new_minute(ac, current_time, frame_idx)
-    # pass
+    # handle_new_minute(ac, current_time, frame_idx)
+    pass
 
 def handle_new_minute(ac: ApproachContext, current_time, frame_idx):
     print(f"New minute {current_time} ${ac.gc.debug_mode} ${len(ac.rolling_buffer_for_debug)}")

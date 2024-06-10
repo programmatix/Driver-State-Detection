@@ -70,6 +70,7 @@ def process_frames(gc: GlobalContext):
         perclos_plotter = RealTimePERCLOSPlot()
 
         frame_idx = 0
+        total_frame_idx = -1
         prev_second = None
         prev_minute = None
         rolling_buffers = [[]]
@@ -98,6 +99,7 @@ def process_frames(gc: GlobalContext):
                 frame_idx = 0  # Reset frame index for each new second
             else:
                 frame_idx += 1
+            total_frame_idx += 1
 
             if prev_minute is None or prev_minute != current_minute:
                 prev_minute = current_minute
@@ -372,12 +374,13 @@ def process_frames(gc: GlobalContext):
                     present_values.append(0)
             elif gc.mode == 3:
                 ac: ApproachContext = ac
-                handle_image(ac, processed, text_list)
+                handle_image(ac, processed, text_list, total_frame_idx)
 
             if (gc.print_timings):
                 print(
                     f"Time to do mode: {(time.perf_counter() - tMode) * 1000} {(time.perf_counter() - t_now) * 1000}")
 
+            text_list.append(f"Frame index: {total_frame_idx}")
             text_list.append(f"FPS Capture: {gc.capture_fps}")
             text_list.append(f"FPS Process: {gc.process_fps}")
             text_list.append(f"FPS Store  : {gc.save_fps}")
@@ -512,8 +515,8 @@ def process_frames(gc: GlobalContext):
             #     print("bad processed 756")
             #     exit(-1)
 
-            if True:
-            #if (frame_idx % 20 == 0):
+            # if True:
+            if (frame_idx % 2 == 0):
                 # show the frame on screen
                 tX = time.perf_counter()
                 cv2.imshow(

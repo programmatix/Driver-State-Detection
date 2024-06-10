@@ -61,8 +61,8 @@ def save_frames(gc: GlobalContext):
 
                 # Save all frames in the buffer that are within the last 5 minutes
                 for bframe, timestamp, idx, desc, timestamp2 in gc.buffered_frames:
-
-                    fn = timestamp2.strftime("%Y-%m-%d_%H-%M-%S") + "-" + desc + "-" + str(idx)
+                    # The -end- just to make it easier to process in training
+                    fn = timestamp2.strftime("%Y-%m-%d_%H-%M-%S") + f"-frame-{str(idx)}-end-{desc}"
 
                     filename1 = f"{folderName}/{fn}.jpg"
 
