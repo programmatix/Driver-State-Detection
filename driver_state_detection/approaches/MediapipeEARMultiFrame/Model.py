@@ -13,6 +13,10 @@ class ProcessedImage:
     # Physical left and right, not frame left and right
     ear_left = None
     ear_right = None
+    roll = None
+    pitch = None
+    yaw = None
+
 
 
 class AnalysedImage:
@@ -53,9 +57,10 @@ class BlinkState(Enum):
     NOT_BLINKING = 4
 
 class BlinkContext:
-    def __init__(self, blink_state: BlinkState, blinks_in_last_period, blinks_total, current_blink_duration_frames):
+    def __init__(self, blink_state: BlinkState, blinks_in_last_period, median_blink_duration_in_last_period, blinks_total, current_blink_duration_frames):
         self.blink_state = blink_state
         self.blinks_in_last_period = blinks_in_last_period
+        self.median_blink_duration_in_last_period = median_blink_duration_in_last_period
         self.blinks_total = blinks_total
         self.current_blink_duration_frames = current_blink_duration_frames
 
@@ -92,3 +97,11 @@ class TrainingSet:
     def __init__(self, images: List[ImageAndFilename], folder: str):
         self.images = images
         self.folder = folder
+
+class Blink:
+    def __init__(self, start_frame, end_frame):
+        self.start_frame = start_frame
+        self.end_frame = end_frame
+
+    def duration_frames(self):
+        return self.end_frame - self.start_frame + 1

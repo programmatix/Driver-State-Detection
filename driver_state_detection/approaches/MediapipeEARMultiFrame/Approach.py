@@ -17,6 +17,8 @@ from approaches.MediapipeEARMultiFrame import ApproachContext
 from approaches.MediapipeEARMultiFrame.Model import ProcessedImage, AnalysedImage, AnalysedImageAndTimeAndContext, \
     BlinkContext, AnalysedImageAndTime, ImageAndFilename
 
+from Pose_Estimation_Module import HeadPoseEstimator as HeadPoseEst
+
 # This has both left and right eyes
 EYES_LMS_NUMS = [33, 133, 160, 144, 158, 153, 362, 263, 385, 380, 387, 373]
 
@@ -60,6 +62,79 @@ class EyeDetector2:
         divided by the eye lenght
         '''
         return ear_eye
+
+    @staticmethod
+    def _calc_1eye_score(landmarks, eye_lms_nums, eye_iris_num, frame_size, frame):
+        """Gets each eye score and its picture."""
+        iris = landmarks[eye_iris_num, :2]
+
+        eye_x_min = landmarks[eye_lms_nums, 0].min()
+        eye_y_min = landmarks[eye_lms_nums, 1].min()
+        eye_x_max = landmarks[eye_lms_nums, 0].max()
+        eye_y_max = landmarks[eye_lms_nums, 1].max()
+
+        eye_center = np.array(((eye_x_min+eye_x_max)/2,
+                               (eye_y_min+eye_y_max)/2))
+
+        eye_gaze_score = LA.norm(iris - eye_center) / eye_center[0]
+
+        eye_x_min_frame = int(eye_x_min * frame_size[0])
+        eye_y_min_frame = int(eye_y_min * frame_size[1])
+        eye_x_max_frame = int(eye_x_max * frame_size[0])
+        eye_y_max_frame = int(eye_y_max * frame_size[1])
+
+        eye = frame[eye_y_min_frame:eye_y_max_frame,
+              eye_x_min_frame:eye_x_max_frame]
+
+        # Draw each item on the frame
+        for i in eye_lms_nums:
+            x = int(landmarks[i, 0] * frame_size[0])
+            y = int(landmarks[i, 1] * frame_size[1])
+            cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)
+
+        # Draw the eye_gaze_score below the eye
+        cv2.putText(frame, f"Gaze Score: {eye_gaze_score}", (eye_x_min_frame, eye_y_max_frame + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        return eye_gaze_score, eye
+
+    def get_Gaze_Score(self, frame, landmarks, frame_size):
+        """
+        Computes the average Gaze Score for the eyes
+        The Gaze Score is the mean of the l2 norm (euclidean distance) between the center point of the Eye ROI
+        (eye bounding box) and the center of the eye-pupil
+
+        Parameters
+        ----------
+        frame: numpy array
+            Frame/image in which the eyes keypoints are found
+        landmarks: numpy array
+            List of 478 face mesh keypoints of the face
+
+        Returns
+        --------
+        avg_gaze_score: float
+            If successful, returns the float gaze score
+            If unsuccessful, returns None
+
+        """
+
+        left_gaze_score, left_eye = self._calc_1eye_score(
+            landmarks, EYES_LMS_NUMS[:6], LEFT_IRIS_NUM, frame_size, frame)
+        right_gaze_score, right_eye = self._calc_1eye_score(
+            landmarks, EYES_LMS_NUMS[6:], RIGHT_IRIS_NUM, frame_size, frame)
+
+        # if show_processing is True, shows the eyes ROI, eye center, pupil center and line distance
+
+        # computes the average gaze score for the 2 eyes
+        avg_gaze_score = (left_gaze_score + right_gaze_score) / 2
+
+        # if self.show_processing and (left_eye is not None) and (right_eye is not None):
+        #     left_eye = resize(left_eye, 1000)
+        #     right_eye = resize(right_eye, 1000)
+        #     cv2.imshow("left eye", left_eye)
+        #     cv2.imshow("right eye", right_eye)
+
+        return avg_gaze_score
 
     def show_eye_keypoints(self, color_frame, landmarks):
         """
@@ -316,7 +391,12 @@ def process_image(ac: ApproachContext, detector, original: any, debug=False, pro
         print(
             f"\tTime to process frame - convert: {(time.perf_counter() - tX) * 1000} {(time.perf_counter() - tStart) * 1000}")
 
+
+    Head_pose = HeadPoseEst(show_axis=True)
+    frame_size = img_colour.shape[1], img_colour.shape[0]
+
     tX = time.perf_counter()
+
 
     lms = get_landmarks(detector, cvt, debug)
     if lms is not None:
@@ -327,6 +407,16 @@ def process_image(ac: ApproachContext, detector, original: any, debug=False, pro
         tX = time.perf_counter()
         landmarks = _get_landmarks(lms)
         landmarks2 = lms[0].landmark
+
+        gaze = Eye_det2.get_Gaze_Score(
+            frame=img_colour, landmarks=landmarks, frame_size=frame_size)
+        #print(gaze)
+
+        frame_det, roll, pitch, yaw = Head_pose.get_pose(
+            frame=img_colour, landmarks=landmarks, frame_size=frame_size)
+        out.roll = roll
+        out.pitch = pitch
+        out.yaw = yaw
 
         if (profile):
             print(
@@ -362,8 +452,9 @@ def process_image(ac: ApproachContext, detector, original: any, debug=False, pro
         out.ear_left = ear_frame_left if not ac.gc.flip_eye_mode else ear_frame_right
         out.ear_right = ear_frame_right if not ac.gc.flip_eye_mode else ear_frame_left
 
-        ac.total_ear_left += out.ear_left
-        ac.ear_left_count += 1
+        if out.ear_left is not None:
+            ac.total_ear_left += out.ear_left
+            ac.ear_left_count += 1
 
         #print(f"EAR frame left: {ear_frame_left} EAR frame right: {ear_frame_right} EAR left: {out.ear_left} EAR right: {out.ear_right}")
 
@@ -457,7 +548,10 @@ def image_annotator(ai: AnalysedImage, img, idx: int):
 def write_to_influx(gc: GlobalContext, ac: ApproachContext):
     try:
         # Names do go on the wire but take minimal space in db
-        value = f"fatigue,host={gc.hostname} blinks3V1={len(ac.blink_recorder._blinks_in_last_period)}"
+        value = f"""fatigue,host="{gc.hostname}",blinksVers="3V1",medianBlinkDurationFramesVers="3V1" blinks={len(ac.blink_recorder._blinks_in_last_period)}"""
+        md = ac.blink_recorder.get_median_blink_duration()
+        if md is not None:
+            value += f",medianBlinkDurationFrames={md}"
 
         value += f",fpsCapture={round(gc.capture_fps)}"
         value += f",fpsProcess={round(gc.process_fps)}"
@@ -465,7 +559,7 @@ def write_to_influx(gc: GlobalContext, ac: ApproachContext):
 
         value += f" {int(time.time())}"
         print(f"Writing data to InfluxDB: {value}")
-        client.write([value], write_precision='s')
+        gc.influx_client.write([value], write_precision='s')
     except Exception as e:
         # Improved error message
         error_type = type(e).__name__
@@ -479,8 +573,8 @@ def handle_image(ac: ApproachContext, processed, text_list: [str], frame_idx: in
 
     if processed is not None:
         img: ProcessedImage = process_image(ac, ac.detector, processed, debug=ac.gc.debug_mode, profile=ac.gc.print_timings)
-        img.frame_idx = frame_idx
         if img is not None:
+            img.frame_idx = frame_idx
             ac.rolling_buffer.append(img)
 
             if len(ac.rolling_buffer) > ac.params.frames_lookback:
@@ -495,6 +589,7 @@ def handle_image(ac: ApproachContext, processed, text_list: [str], frame_idx: in
                 # if True:
                     ac.rolling_buffer_for_debug.append(a)
 
+                text_list.append(f"Roll: {latest.processed.roll} Pitch: {latest.processed.pitch} Yaw: {latest.processed.yaw}")
                 text_list.append(f"Frame idx: {frame_idx}")
                 text_list.append(f"Prev frame idx: {latest.prev.frame_idx}")
                 text_list.append(f"Avg ear left: {ac.avg_ear_left()}")
@@ -505,6 +600,7 @@ def handle_image(ac: ApproachContext, processed, text_list: [str], frame_idx: in
                 text_list.append(f"Blink state: {a.bc.blink_state}")
                 text_list.append(f"Current blink duration frames: {a.bc.current_blink_duration_frames}")
                 text_list.append(f"Blinks in last {ac.blink_recorder.period_frames} frames: {a.bc.blinks_in_last_period}")
+                text_list.append(f"Median blink duration in last {ac.blink_recorder.period_frames} frames: {a.bc.median_blink_duration_in_last_period}")
                 text_list.append(f"Blinks ever: {a.bc.blinks_total}")
 
                 return a
@@ -519,6 +615,8 @@ def handle_image(ac: ApproachContext, processed, text_list: [str], frame_idx: in
 
     if not recorded_blink_frame:
         ac.blink_recorder.record_empty(ac)
+
+    ac.gc.save_with_training_set['avg_ear_left'] = ac.avg_ear_left()
 
 # def handle_image_for_training(ac: ApproachContext, processed, all_images: List[ImageAndFilename], current_index: int, text_list: [str]):
 #     if processed is not None:

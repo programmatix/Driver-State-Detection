@@ -1,6 +1,7 @@
 import time
 
 import cv2
+import json
 import os
 import queue
 import traceback
@@ -72,6 +73,11 @@ def save_frames(gc: GlobalContext):
                             f.write(bframe.tobytes())
                     else:
                         cv2.imwrite(filename1, bframe)
+
+                json_file = f'{folderName}/training_set.json'
+                print(f"Writing {json_file}")
+                with open(json_file, 'w') as f:
+                    json.dump(gc.save_with_training_set, f)
 
                 gc.buffered_frames = []
 

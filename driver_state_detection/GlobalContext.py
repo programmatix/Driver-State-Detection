@@ -3,6 +3,7 @@ import os
 import queue
 import socket
 from dotenv import load_dotenv
+from influxdb_client_3 import InfluxDBClient3
 
 load_dotenv()
 
@@ -14,6 +15,8 @@ class GlobalContext:
     INFLUXDB_TOKEN = os.getenv('INFLUXDB_TOKEN')
     INFLUXDB_ORG = os.getenv('INFLUXDB_ORG')
     INFLUXDB_BUCKET = os.getenv('INFLUXDB_BUCKET')
+
+    save_with_training_set = {}
 
     # Some approaches make assumptions/requirements of this
     required_capture_fps = 60
@@ -47,3 +50,8 @@ class GlobalContext:
         self.mode = getattr(args, 'mode', False) or None
         if args.input:
             self.frame_queue_for_processing.put(cv2.imread(args.input))
+        self.influx_client = InfluxDBClient3(
+            host=self.INFLUXDB_URL,
+            token=self.INFLUXDB_TOKEN,
+            database=self.INFLUXDB_BUCKET
+        )

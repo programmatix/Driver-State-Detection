@@ -16,6 +16,7 @@ class ApproachParams:
     frames_lookback = 10
     ear_left_threshold_for_blink_start = 0.5
     ear_left_threshold_for_blink_stop = 0.4
+    maximum_blink_frames = 20
 
 class ApproachContext:
     params = ApproachParams()
@@ -23,7 +24,6 @@ class ApproachContext:
     rolling_buffer = []
     total_ear_left = 0.0
     ear_left_count = 0
-
 
     detector = mp.solutions.face_mesh.FaceMesh(static_image_mode=False,
                                                min_detection_confidence=0.5,
@@ -37,5 +37,7 @@ class ApproachContext:
 
 
     def avg_ear_left(self):
+        if self.ear_left_count == 0:
+            return 0
         return self.total_ear_left / self.ear_left_count
 

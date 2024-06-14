@@ -13,12 +13,12 @@ sys.path.insert(0, "C:\\dev\\Projects\\Driver-State-Detection\\driver_state_dete
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 from GlobalContext import GlobalContext
-from approaches.MediapipeEARMultiFrame.Training.TrainingDisplay import display_frames
+from approaches.MediapipeEARHeadPoseEpochs.Training.TrainingDisplay import display_frames
 from Model import ImageAndFilename
 
 from Approach import handle_image
 from ApproachContext import ApproachContext
-from approaches.MediapipeEARMultiFrame.Model import ImageAndFilenameAndContext, AnalysedImageAndTimeAndContext, GoodBad, \
+from approaches.MediapipeEARHeadPoseEpochs.Model import ImageAndFilenameAndContext, AnalysedImageAndTimeAndContext, GoodBad, \
     TrainingSet
 
 

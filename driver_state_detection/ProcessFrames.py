@@ -23,6 +23,10 @@ from approaches.MediapipeEARMultiFrame.Approach import handle_new_second, handle
 from approaches.MediapipeEARMultiFrame.ApproachContext import ApproachContext
 
 
+import approaches.MediapipeEARMultiFrame as Mode3
+from approaches.MediapipeEARHeadPoseEpochs.ApproachContext import ApproachContext as Mode4ApproachContext
+import approaches.MediapipeEARHeadPoseEpochs.Approach as Mode4Approach
+
 # from influxdb_client_3 import InfluxDBClient3
 
 
@@ -39,7 +43,6 @@ def process_frames(gc: GlobalContext):
         # instantiation of the eye detector and pose estimator objects
         Eye_det = EyeDet(show_processing=False)
 
-        #Head_pose = HeadPoseEst(show_axis=args.show_axis)
 
         # instantiation of the attention scorer object, with the various thresholds
         # NOTE: set verbose to True for additional printed information about the scores
@@ -80,7 +83,9 @@ def process_frames(gc: GlobalContext):
         last_processed = None
         ac = None
         if gc.mode == 3:
-            ac = ApproachContext(gc)
+            ac = Mode3.ApproachContext(gc)
+        elif gc.mode == 4:
+            ac = Mode4ApproachContext(gc)
 
         while gc.done is False:
             t_now = time.perf_counter()
@@ -94,7 +99,8 @@ def process_frames(gc: GlobalContext):
                 prev_second = current_second
                 gc.process_fps = frame_idx
 
-                handle_new_second(ac, current_time, frame_idx)
+                if gc.mode == 3:
+                    handle_new_second(ac, current_time, frame_idx)
 
                 frame_idx = 0  # Reset frame index for each new second
             else:
@@ -103,7 +109,8 @@ def process_frames(gc: GlobalContext):
 
             if prev_minute is None or prev_minute != current_minute:
                 prev_minute = current_minute
-                handle_new_minute(ac, current_time, frame_idx)
+                if gc.mode == 3:
+                    handle_new_minute(ac, current_time, frame_idx)
 
             fps = i / (t_now - t_last_save)
             if fps == 0:
@@ -373,8 +380,10 @@ def process_frames(gc: GlobalContext):
                 else:
                     present_values.append(0)
             elif gc.mode == 3:
-                ac: ApproachContext = ac
-                handle_image(ac, processed, text_list, total_frame_idx)
+                Mode3.handle_image(ac, processed, text_list, total_frame_idx)
+            elif gc.mode == 4:
+                Mode4Approach.handle_image(ac, processed, text_list, total_frame_idx)
+
 
             if (gc.print_timings):
                 print(
@@ -541,6 +550,8 @@ def process_frames(gc: GlobalContext):
                 elif key == ord('s'):
                     gc.dump_buffered_frames = True
                 elif key == ord('b'):
+                    if not gc.buffer_mode:
+                        gc.buffered_frames.clear()
                     gc.buffer_mode = not gc.buffer_mode
                 elif key == ord('p'):
                     gc.print_timings = not gc.print_timings
